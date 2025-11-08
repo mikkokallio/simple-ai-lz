@@ -120,6 +120,15 @@ resource translationTargetContainer 'Microsoft.Storage/storageAccounts/blobServi
   }
 }
 
+// Workspace container for document management and results caching
+resource workspaceContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+  parent: blobService
+  name: 'workspace'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // ============================================================================
 // MICROSOFT DEFENDER FOR STORAGE
 // ============================================================================

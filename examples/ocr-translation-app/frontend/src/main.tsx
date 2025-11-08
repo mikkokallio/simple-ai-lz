@@ -30,6 +30,19 @@ interface UploadedFile {
   status: 'pending' | 'uploading' | 'uploaded' | 'processing' | 'completed' | 'error'
   result?: any
   error?: string
+  documentId?: string
+}
+
+interface WorkspaceDocument {
+  documentId: string
+  originalFilename: string
+  mimeType: string
+  uploadTime: string
+  fileSize: number
+  malwareScanStatus: 'pending' | 'clean' | 'infected'
+  malwareScanTime?: string
+  processedModes: string[]
+  lastAccessed: string
 }
 
 type ProcessingMode = 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai'
@@ -47,13 +60,32 @@ function App() {
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
   const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
+  const [workspaceDocuments, setWorkspaceDocuments] = useState<WorkspaceDocument[]>([])
+  const [showWorkspace, setShowWorkspace] = useState(false)
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
       .then(res => res.json())
       .then(data => setHealth(data))
       .catch(err => setError(err.message))
+    
+    // Load workspace documents
+    loadWorkspaceDocuments()
   }, [])
+  
+  const loadWorkspaceDocuments = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/workspace/documents`, {
+        credentials: 'include' // Include cookies for session
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        setWorkspaceDocuments(data.documents)
+      }
+    } catch (err) {
+      console.error('Failed to load workspace documents:', err)
+    }
+  }
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -246,6 +278,50 @@ function App() {
           </p>
         </div>
 
+        {/* Tab Navigation */}
+        <div style={{ 
+          display: 'flex', 
+          gap: '1rem', 
+          marginBottom: '1rem',
+          justifyContent: 'center'
+        }}>
+          <button
+            onClick={() => setShowWorkspace(false)}
+            style={{
+              background: !showWorkspace ? 'white' : 'rgba(255,255,255,0.3)',
+              color: !showWorkspace ? '#667eea' : 'white',
+              border: 'none',
+              padding: '0.75rem 2rem',
+              borderRadius: '8px',
+              fontSize: '1rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.3s'
+            }}
+          >
+            📤 Upload & Process
+          </button>
+          <button
+            onClick={() => {
+              setShowWorkspace(true)
+              loadWorkspaceDocuments()
+            }}
+            style={{
+              background: showWorkspace ? 'white' : 'rgba(255,255,255,0.3)',
+              color: showWorkspace ? '#667eea' : 'white',
+              border: 'none',
+              padding: '0.75rem 2rem',
+              borderRadius: '8px',
+              fontSize: '1rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.3s'
+            }}
+          >
+            📁 My Documents ({workspaceDocuments.length})
+          </button>
+        </div>
+
         {/* Health Status */}
         {error && (
           <div style={{ 
@@ -283,6 +359,9 @@ function App() {
           </div>
         )}
 
+        {/* Main Content - Conditionally render Upload or Workspace */}
+        {!showWorkspace ? (
+          <>
         {/* Processing Mode Selector */}
         <div style={{ 
           background: 'rgba(255, 255, 255, 0.95)', 
@@ -645,6 +724,117 @@ function App() {
             ⚠️ MVP Version: Storage upload and actual AI processing will be implemented next
           </p>
         </div>
+          </>
+        ) : (
+          /* Workspace Document Library */
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            padding: '1.5rem', 
+            borderRadius: '12px',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          }}>
+            <h3 style={{ margin: '0 0 1.5rem 0', color: '#333' }}>📁 My Documents</h3>
+            
+            {workspaceDocuments.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
+                <p style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>No documents yet</p>
+                <p style={{ fontSize: '0.9rem' }}>Upload documents in the "Upload & Process" tab to get started</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                {workspaceDocuments.map(doc => (
+                  <div 
+                    key={doc.documentId}
+                    style={{ 
+                      background: 'white', 
+                      padding: '1.5rem', 
+                      borderRadius: '8px',
+                      border: '1px solid #e5e7eb',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1rem' }}>
+                      <div style={{ flex: 1 }}>
+                        <h4 style={{ margin: '0 0 0.5rem 0', color: '#333', fontSize: '1.1rem' }}>
+                          📄 {doc.originalFilename}
+                        </h4>
+                        <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                          <div>Uploaded: {new Date(doc.uploadTime).toLocaleString()}</div>
+                          <div>Size: {(doc.fileSize / 1024).toFixed(1)} KB</div>
+                          <div>
+                            Malware Scan: 
+                            <span style={{ 
+                              marginLeft: '0.5rem',
+                              color: doc.malwareScanStatus === 'clean' ? '#10b981' : 
+                                     doc.malwareScanStatus === 'infected' ? '#ef4444' : '#f59e0b',
+                              fontWeight: '600'
+                            }}>
+                              {doc.malwareScanStatus === 'clean' && '✅ Clean'}
+                              {doc.malwareScanStatus === 'infected' && '⚠️ Infected'}
+                              {doc.malwareScanStatus === 'pending' && '⏳ Pending'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: '#666', textAlign: 'right' }}>
+                        <div style={{ marginBottom: '0.5rem' }}>
+                          Processed: {doc.processedModes.length > 0 ? doc.processedModes.join(', ') : 'None'}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {doc.processedModes.length > 0 && (
+                      <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          {doc.processedModes.map(mode => (
+                            <button
+                              key={mode}
+                              onClick={async () => {
+                                try {
+                                  const response = await fetch(
+                                    `${API_BASE_URL}/api/workspace/${doc.documentId}/result/${mode}`,
+                                    { credentials: 'include' }
+                                  )
+                                  if (response.headers.get('content-type')?.includes('application/json')) {
+                                    const data = await response.json()
+                                    alert(JSON.stringify(data.result, null, 2))
+                                  } else {
+                                    // Binary file - download it
+                                    const blob = await response.blob()
+                                    const url = URL.createObjectURL(blob)
+                                    const a = document.createElement('a')
+                                    a.href = url
+                                    a.download = `${doc.originalFilename}-${mode}`
+                                    a.click()
+                                    URL.revokeObjectURL(url)
+                                  }
+                                } catch (err) {
+                                  alert('Failed to load result: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                                }
+                              }}
+                              style={{
+                                background: '#667eea',
+                                color: 'white',
+                                border: 'none',
+                                padding: '0.5rem 1rem',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontSize: '0.9rem',
+                                fontWeight: '600'
+                              }}
+                            >
+                              📥 View {mode} result
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

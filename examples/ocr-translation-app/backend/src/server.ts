@@ -5,6 +5,8 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import axios from 'axios';
+import session from 'express-session';
+import { v4 as uuidv4 } from 'uuid';
 import * as appInsights from 'applicationinsights';
 import { DefaultAzureCredential } from '@azure/identity';
 import { BlobServiceClient, BlockBlobClient } from '@azure/storage-blob';
@@ -109,11 +111,187 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
 const app: Express = express();
 const port = process.env.PORT || 3000;
 
+// Session middleware for user identification
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'default-secret-change-in-production',
+  resave: false,
+  saveUninitialized: true,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
 // Middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('combined'));
+
+// Extend session type
+declare module 'express-session' {
+  interface SessionData {
+    userId: string;
+  }
+}
+
+// Ensure userId exists in session
+app.use((req, _res, next) => {
+  if (!req.session.userId) {
+    req.session.userId = uuidv4();
+  }
+  next();
+});
+
+// Workspace utility functions
+interface DocumentMetadata {
+  documentId: string;
+  originalFilename: string;
+  mimeType: string;
+  uploadTime: string;
+  fileSize: number;
+  malwareScanStatus: 'pending' | 'clean' | 'infected';
+  malwareScanTime?: string;
+  processedModes: string[];
+  lastAccessed: string;
+}
+
+async function saveToWorkspace(
+  userId: string,
+  documentId: string,
+  filename: string,
+  fileBuffer: Buffer,
+  mimeType: string
+): Promise<void> {
+  if (!blobServiceClient) throw new Error('Storage not configured');
+  
+  const containerClient = blobServiceClient.getContainerClient('workspace');
+  
+  // Save original file
+  const originalBlobClient = containerClient.getBlockBlobClient(
+    `${userId}/${documentId}/original/${filename}`
+  );
+  await originalBlobClient.upload(fileBuffer, fileBuffer.length, {
+    blobHTTPHeaders: { blobContentType: mimeType }
+  });
+  
+  // Save metadata
+  const metadata: DocumentMetadata = {
+    documentId,
+    originalFilename: filename,
+    mimeType,
+    uploadTime: new Date().toISOString(),
+    fileSize: fileBuffer.length,
+    malwareScanStatus: 'pending',
+    processedModes: [],
+    lastAccessed: new Date().toISOString()
+  };
+  
+  const metadataBlobClient = containerClient.getBlockBlobClient(
+    `${userId}/${documentId}/metadata.json`
+  );
+  await metadataBlobClient.upload(
+    JSON.stringify(metadata, null, 2),
+    JSON.stringify(metadata).length,
+    { blobHTTPHeaders: { blobContentType: 'application/json' } }
+  );
+}
+
+async function saveResultToWorkspace(
+  userId: string,
+  documentId: string,
+  mode: 'ocr' | 'translate' | 'analyze',
+  result: any,
+  filename?: string
+): Promise<void> {
+  if (!blobServiceClient) throw new Error('Storage not configured');
+  
+  const containerClient = blobServiceClient.getContainerClient('workspace');
+  
+  // Update metadata to include this mode
+  const metadataBlobClient = containerClient.getBlockBlobClient(
+    `${userId}/${documentId}/metadata.json`
+  );
+  
+  try {
+    const downloadResponse = await metadataBlobClient.download();
+    const metadataContent = await streamToBuffer(downloadResponse.readableStreamBody!);
+    const metadata: DocumentMetadata = JSON.parse(metadataContent.toString());
+    
+    if (!metadata.processedModes.includes(mode)) {
+      metadata.processedModes.push(mode);
+    }
+    metadata.lastAccessed = new Date().toISOString();
+    
+    await metadataBlobClient.upload(
+      JSON.stringify(metadata, null, 2),
+      JSON.stringify(metadata).length,
+      { blobHTTPHeaders: { blobContentType: 'application/json' } }
+    );
+  } catch (err) {
+    console.error('Failed to update metadata:', err);
+  }
+  
+  // Save result
+  const resultFilename = filename || 'result.json';
+  const resultBlobClient = containerClient.getBlockBlobClient(
+    `${userId}/${documentId}/results/${mode}/${resultFilename}`
+  );
+  
+  if (typeof result === 'string' || Buffer.isBuffer(result)) {
+    const buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+    await resultBlobClient.upload(buffer, buffer.length);
+  } else {
+    const jsonString = JSON.stringify(result, null, 2);
+    await resultBlobClient.upload(jsonString, jsonString.length, {
+      blobHTTPHeaders: { blobContentType: 'application/json' }
+    });
+  }
+}
+
+async function getDocumentMetadata(userId: string, documentId: string): Promise<DocumentMetadata | null> {
+  if (!blobServiceClient) throw new Error('Storage not configured');
+  
+  const containerClient = blobServiceClient.getContainerClient('workspace');
+  const metadataBlobClient = containerClient.getBlockBlobClient(
+    `${userId}/${documentId}/metadata.json`
+  );
+  
+  try {
+    const downloadResponse = await metadataBlobClient.download();
+    const content = await streamToBuffer(downloadResponse.readableStreamBody!);
+    return JSON.parse(content.toString());
+  } catch (err) {
+    return null;
+  }
+}
+
+async function listUserDocuments(userId: string): Promise<DocumentMetadata[]> {
+  if (!blobServiceClient) throw new Error('Storage not configured');
+  
+  const containerClient = blobServiceClient.getContainerClient('workspace');
+  const documents: DocumentMetadata[] = [];
+  
+  // List all document folders for this user
+  for await (const blob of containerClient.listBlobsByHierarchy('/', {
+    prefix: `${userId}/`
+  })) {
+    if (blob.kind === 'prefix') {
+      const documentId = blob.name.split('/')[1];
+      const metadata = await getDocumentMetadata(userId, documentId);
+      if (metadata) {
+        documents.push(metadata);
+      }
+    }
+  }
+  
+  return documents.sort((a, b) => 
+    new Date(b.uploadTime).getTime() - new Date(a.uploadTime).getTime()
+  );
+}
 
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response) => {
@@ -137,6 +315,13 @@ app.get('/', (_req: Request, res: Response) => {
     status: 'running',
     endpoints: {
       health: '/health',
+      workspace: {
+        upload: '/api/workspace/upload',
+        documents: '/api/workspace/documents',
+        document: '/api/workspace/:documentId',
+        process: '/api/workspace/:documentId/process',
+        result: '/api/workspace/:documentId/result/:mode'
+      },
       ocr: {
         documentIntelligence: '/api/ocr/document-intelligence',
         contentUnderstanding: '/api/ocr/content-understanding'
@@ -144,6 +329,184 @@ app.get('/', (_req: Request, res: Response) => {
       translation: '/api/translate'
     }
   });
+});
+
+// Workspace API endpoints
+
+// Upload document to workspace
+app.post('/api/workspace/upload', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ status: 'error', message: 'No file provided' });
+    }
+    
+    const documentId = uuidv4();
+    const userId = req.session.userId!;
+    
+    await saveToWorkspace(
+      userId,
+      documentId,
+      req.file.originalname,
+      req.file.buffer,
+      req.file.mimetype
+    );
+    
+    const metadata = await getDocumentMetadata(userId, documentId);
+    
+    res.json({
+      status: 'success',
+      documentId,
+      metadata
+    });
+  } catch (error) {
+    console.error('Workspace upload error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to upload document'
+    });
+  }
+});
+
+// List user's documents
+app.get('/api/workspace/documents', async (req: Request, res: Response) => {
+  try {
+    const userId = req.session.userId!;
+    const documents = await listUserDocuments(userId);
+    
+    res.json({
+      status: 'success',
+      documents
+    });
+  } catch (error) {
+    console.error('List documents error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to list documents'
+    });
+  }
+});
+
+// Get document metadata
+app.get('/api/workspace/:documentId', async (req: Request, res: Response) => {
+  try {
+    const userId = req.session.userId!;
+    const { documentId } = req.params;
+    
+    const metadata = await getDocumentMetadata(userId, documentId);
+    
+    if (!metadata) {
+      return res.status(404).json({ status: 'error', message: 'Document not found' });
+    }
+    
+    res.json({
+      status: 'success',
+      metadata
+    });
+  } catch (error) {
+    console.error('Get metadata error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to get metadata'
+    });
+  }
+});
+
+// Get document result
+app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Response) => {
+  try {
+    const userId = req.session.userId!;
+    const { documentId, mode } = req.params;
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    
+    // List blobs in the result directory
+    const prefix = `${userId}/${documentId}/results/${mode}/`;
+    let resultBlob = null;
+    
+    for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+      resultBlob = blob;
+      break; // Get first result file
+    }
+    
+    if (!resultBlob) {
+      return res.status(404).json({ status: 'error', message: 'Result not found' });
+    }
+    
+    const blobClient = containerClient.getBlobClient(resultBlob.name);
+    const downloadResponse = await blobClient.download();
+    const content = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    // Check if it's JSON
+    if (resultBlob.name.endsWith('.json')) {
+      res.json({
+        status: 'success',
+        result: JSON.parse(content.toString())
+      });
+    } else {
+      // Return binary file
+      res.setHeader('Content-Type', downloadResponse.contentType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${resultBlob.name.split('/').pop()}"`);
+      res.send(content);
+    }
+  } catch (error) {
+    console.error('Get result error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to get result'
+    });
+  }
+});
+
+// Process document from workspace
+app.post('/api/workspace/:documentId/process', async (req: Request, res: Response) => {
+  try {
+    const userId = req.session.userId!;
+    const { documentId } = req.params;
+    const { mode, targetLanguage } = req.body;
+    
+    if (!['ocr', 'translate', 'analyze'].includes(mode)) {
+      return res.status(400).json({ status: 'error', message: 'Invalid processing mode' });
+    }
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    // Get document metadata
+    const metadata = await getDocumentMetadata(userId, documentId);
+    if (!metadata) {
+      return res.status(404).json({ status: 'error', message: 'Document not found' });
+    }
+    
+    // Get original file
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const originalBlobClient = containerClient.getBlockBlobClient(
+      `${userId}/${documentId}/original/${metadata.originalFilename}`
+    );
+    
+    const downloadResponse = await originalBlobClient.download();
+    const fileBuffer = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    // Process based on mode (implement actual processing logic here)
+    // For now, return a placeholder response
+    res.json({
+      status: 'success',
+      message: `Processing ${mode} for document ${documentId}`,
+      documentId,
+      mode
+    });
+    
+  } catch (error) {
+    console.error('Process document error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to process document'
+    });
+  }
 });
 
 // OCR endpoint - Document Intelligence
