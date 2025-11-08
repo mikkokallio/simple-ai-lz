@@ -39,6 +39,12 @@ param documentIntelligenceResourceId string = ''
 @description('Document Translator resource ID for RBAC')
 param documentTranslatorResourceId string = ''
 
+@description('Storage account name for blob uploads')
+param storageAccountName string = ''
+
+@description('Storage account resource ID for RBAC')
+param storageAccountResourceId string = ''
+
 @description('Frontend container image')
 param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
@@ -55,6 +61,9 @@ var frontendAppName = 'aca-${appNamePrefix}-frontend-${uniqueSuffix}'
 
 // Cognitive Services User role for AI services access
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
+
+// Storage Blob Data Contributor role for blob uploads
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // ============================================================================
 // BACKEND CONTAINER APP
@@ -126,6 +135,10 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'TRANSLATOR_ENDPOINT'
               value: documentTranslatorEndpoint
+            }
+            {
+              name: 'STORAGE_ACCOUNT_NAME'
+              value: storageAccountName
             }
           ]
         }
@@ -225,10 +238,31 @@ resource frontendApp 'Microsoft.App/containerApps@2023-05-01' = {
 // RBAC ASSIGNMENTS (Backend managed identity to AI services)
 // ============================================================================
 
+// Reference to AI services for proper scoping
+resource aiFoundryService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(aiFoundryResourceId)) {
+  name: last(split(aiFoundryResourceId, '/'))
+  scope: resourceGroup(split(aiFoundryResourceId, '/')[2], split(aiFoundryResourceId, '/')[4])
+}
+
+resource documentIntelligenceService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(documentIntelligenceResourceId)) {
+  name: last(split(documentIntelligenceResourceId, '/'))
+  scope: resourceGroup(split(documentIntelligenceResourceId, '/')[2], split(documentIntelligenceResourceId, '/')[4])
+}
+
+resource translatorService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(documentTranslatorResourceId)) {
+  name: last(split(documentTranslatorResourceId, '/'))
+  scope: resourceGroup(split(documentTranslatorResourceId, '/')[2], split(documentTranslatorResourceId, '/')[4])
+}
+
+resource storageAccountService 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(storageAccountResourceId)) {
+  name: last(split(storageAccountResourceId, '/'))
+  scope: resourceGroup(split(storageAccountResourceId, '/')[2], split(storageAccountResourceId, '/')[4])
+}
+
 // RBAC to AI Foundry
 resource backendToAiFoundryRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(aiFoundryResourceId)) {
   name: guid(backendApp.id, aiFoundryResourceId, cognitiveServicesUserRoleId)
-  scope: resourceGroup()
+  scope: aiFoundryService
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
     principalId: backendApp.identity.principalId
@@ -239,7 +273,7 @@ resource backendToAiFoundryRbac 'Microsoft.Authorization/roleAssignments@2022-04
 // RBAC to Document Intelligence
 resource backendToDocIntelligenceRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(documentIntelligenceResourceId)) {
   name: guid(backendApp.id, documentIntelligenceResourceId, cognitiveServicesUserRoleId)
-  scope: resourceGroup()
+  scope: documentIntelligenceService
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
     principalId: backendApp.identity.principalId
@@ -250,9 +284,20 @@ resource backendToDocIntelligenceRbac 'Microsoft.Authorization/roleAssignments@2
 // RBAC to Document Translator
 resource backendToTranslatorRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(documentTranslatorResourceId)) {
   name: guid(backendApp.id, documentTranslatorResourceId, cognitiveServicesUserRoleId)
-  scope: resourceGroup()
+  scope: translatorService
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
+    principalId: backendApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// RBAC to Storage Account (for blob uploads)
+resource backendToStorageRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(storageAccountResourceId)) {
+  name: guid(backendApp.id, storageAccountResourceId, storageBlobDataContributorRoleId)
+  scope: storageAccountService
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
     principalId: backendApp.identity.principalId
     principalType: 'ServicePrincipal'
   }

@@ -76,13 +76,40 @@ az deployment sub create \
 
 ### 2. Deploy the App
 
+**Option A: Using the PowerShell deployment script (recommended)**
+
 ```powershell
 # From examples/ocr-translation-app/infrastructure/
+./deploy-app.ps1 -ResourceGroup rg-ailz-lab -UniqueSuffix <your-suffix>
+```
+
+The script automatically:
+- Retrieves all required resource IDs
+- Configures RBAC assignments (Cognitive Services User, Storage Blob Data Contributor)
+- Deploys frontend and backend Container Apps
+- Displays application URLs
+
+**Option B: Manual deployment with parameters file**
+
+```powershell
+# 1. Copy and customize the parameters file
+cp app.parameters.example.json app.parameters.json
+# Edit app.parameters.json with your resource IDs
+
+# 2. Deploy
 az deployment group create \
   --resource-group rg-ailz-lab \
   --template-file app.bicep \
   --parameters @app.parameters.json
 ```
+
+**Required RBAC Assignments (automatically configured by Bicep):**
+- Backend managed identity → Document Intelligence: `Cognitive Services User`
+- Backend managed identity → Translator: `Cognitive Services User`  
+- Backend managed identity → Storage Account: `Storage Blob Data Contributor`
+- Backend managed identity → AI Foundry (optional): `Cognitive Services User`
+
+These RBAC assignments are defined in `app.bicep` and are automatically created during deployment.
 
 ### 3. Access the App
 
@@ -124,10 +151,25 @@ Configuration is managed via environment variables injected by Container Apps:
 
 - `AZURE_CLIENT_ID` - Managed identity client ID (auto-injected)
 - `DOCUMENT_INTELLIGENCE_ENDPOINT` - Document Intelligence service endpoint
-- `AI_FOUNDRY_ENDPOINT` - AI Foundry endpoint
+- `AI_FOUNDRY_ENDPOINT` - AI Foundry endpoint (optional)
 - `TRANSLATOR_ENDPOINT` - Translator service endpoint
+- `STORAGE_ACCOUNT_NAME` - Storage account for blob uploads (used by Translator)
+- `APPLICATIONINSIGHTS_CONNECTION_STRING` - Application Insights for telemetry
 
-No secrets or keys are needed - authentication uses managed identity.
+No secrets or keys are needed - authentication uses managed identity with RBAC.
+
+## RBAC & Permissions
+
+The backend Container App uses a **system-assigned managed identity** with the following role assignments:
+
+| Target Resource | Role | Purpose |
+|----------------|------|---------|
+| Document Intelligence | Cognitive Services User | Read text from documents |
+| Translator | Cognitive Services User | Translate documents |
+| Storage Account | Storage Blob Data Contributor | Upload/download files for translation |
+| AI Foundry (optional) | Cognitive Services User | Content understanding |
+
+These assignments are **declared in `infrastructure/app.bicep`** and are automatically created during deployment. All permissions follow the principle of least privilege.
 
 ## Security
 

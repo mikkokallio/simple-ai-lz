@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerAppsEnvironmentId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/<rg-name>/providers/Microsoft.App/managedEnvironments/<env-name>"
+    },
+    "appInsightsConnectionString": {
+      "value": "InstrumentationKey=<key>;IngestionEndpoint=https://..."
+    },
+    "location": {
+      "value": "swedencentral"
+    },
+    "uniqueSuffix": {
+      "value": "<unique-suffix>"
+    },
+    "acrPassword": {
+      "value": "<acr-password-or-use-keyvault-reference>"
+    },
+    "aiFoundryEndpoint": {
+      "value": "https://<ai-foundry>.cognitiveservices.azure.com/"
+    },
+    "documentIntelligenceEndpoint": {
+      "value": "https://<doc-intel>.cognitiveservices.azure.com/"
+    },
+    "documentTranslatorEndpoint": {
+      "value": "https://<translator>.cognitiveservices.azure.com/"
+    },
+    "aiFoundryResourceId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/<rg-name>/providers/Microsoft.CognitiveServices/accounts/<ai-foundry-name>"
+    },
+    "documentIntelligenceResourceId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/<rg-name>/providers/Microsoft.CognitiveServices/accounts/<doc-intel-name>"
+    },
+    "documentTranslatorResourceId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/<rg-name>/providers/Microsoft.CognitiveServices/accounts/<translator-name>"
+    },
+    "storageAccountName": {
+      "value": "<storage-account-name>"
+    },
+    "storageAccountResourceId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/<rg-name>/providers/Microsoft.Storage/storageAccounts/<storage-account-name>"
+    },
+    "frontendImage": {
+      "value": "<acr-name>.azurecr.io/ocr-translation-frontend:latest"
+    },
+    "backendImage": {
+      "value": "<acr-name>.azurecr.io/ocr-translation-backend:latest"
+    }
+  }
+}
