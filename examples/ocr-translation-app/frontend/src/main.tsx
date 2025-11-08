@@ -126,13 +126,32 @@ function App() {
     if (!fileToProcess) return
 
     try {
-      // Step 1: Upload to blob storage ONLY for Azure Translator (it requires blob containers)
-      // Document Intelligence and Content Understanding can work with direct file upload
+      // Step 1: Upload to workspace first
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'uploading' as const } : f))
+      
+      const workspaceFormData = new FormData()
+      workspaceFormData.append('file', fileToProcess.file)
+
+      const workspaceResponse = await fetch(`${API_BASE_URL}/api/workspace/upload`, {
+        method: 'POST',
+        body: workspaceFormData,
+        credentials: 'include' // Include session cookie
+      })
+
+      if (!workspaceResponse.ok) {
+        throw new Error(`Workspace upload failed: ${workspaceResponse.statusText}`)
+      }
+
+      const workspaceResult = await workspaceResponse.json()
+      const documentId = workspaceResult.documentId
+      
+      // Store documentId in the file object
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, documentId } : f))
+      
+      // Step 2: Upload to blob storage for Azure Translator (it requires blob containers)
       let blobUrl: string | undefined
       
       if (processingMode === 'translate') {
-        setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'uploading' as const } : f))
-        
         const uploadFormData = new FormData()
         uploadFormData.append('file', fileToProcess.file)
 
@@ -149,7 +168,7 @@ function App() {
         blobUrl = uploadResult.blobUrl
       }
 
-      // Step 2: Process the file
+      // Step 3: Process the file
       setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'processing' as const } : f))
       
       const formData = new FormData()
@@ -225,6 +244,9 @@ function App() {
       setFiles(prev => prev.map((f, i) => 
         i === index ? { ...f, status: 'completed' as const, result: { ...result, blobUrl } } : f
       ))
+      
+      // Reload workspace documents to show the newly processed file
+      loadWorkspaceDocuments()
     } catch (err) {
       setFiles(prev => prev.map((f, i) => 
         i === index ? { 
