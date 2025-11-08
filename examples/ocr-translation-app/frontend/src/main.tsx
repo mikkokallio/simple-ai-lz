@@ -93,17 +93,35 @@ function App() {
     const fileToProcess = files[index]
     if (!fileToProcess) return
 
-    // Update status to uploading
-    setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'uploading' as const } : f))
-
     try {
-      // TODO: Upload to Azure Storage Blob via backend
-      // For now, send directly to backend API
+      // Step 1: Upload to blob storage ONLY for Azure Translator (it requires blob containers)
+      // Document Intelligence and Content Understanding can work with direct file upload
+      let blobUrl: string | undefined
+      
+      if (processingMode === 'translate') {
+        setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'uploading' as const } : f))
+        
+        const uploadFormData = new FormData()
+        uploadFormData.append('file', fileToProcess.file)
+
+        const uploadResponse = await fetch(`${API_BASE_URL}/api/upload`, {
+          method: 'POST',
+          body: uploadFormData
+        })
+
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload failed: ${uploadResponse.statusText}`)
+        }
+
+        const uploadResult = await uploadResponse.json()
+        blobUrl = uploadResult.blobUrl
+      }
+
+      // Step 2: Process the file
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'processing' as const } : f))
       
       const formData = new FormData()
       formData.append('file', fileToProcess.file)
-
-      setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'processing' as const } : f))
 
       let endpoint = ''
       switch (processingMode) {
@@ -111,7 +129,7 @@ function App() {
           endpoint = '/api/ocr/document-intelligence'
           break
         case 'ocr-cu':
-          endpoint = '/api/ocr/content-understanding'
+          endpoint = '/api/ocr/language-analysis'
           break
         case 'ocr-openai':
           endpoint = '/api/ocr/openai'
@@ -134,15 +152,46 @@ function App() {
         formData.append('targetLanguage', targetLanguage)
       }
 
+      // Add blobUrl for Azure Translator (required)
+      if (blobUrl) {
+        formData.append('blobUrl', blobUrl)
+      }
+
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
         body: formData
       })
 
-      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(`Processing failed: ${response.statusText}`)
+      }
+
+      // Handle translation response (binary PDF) vs JSON responses
+      let result
+      if (processingMode === 'translate') {
+        // Translation returns binary PDF
+        const blob = await response.blob()
+        const downloadUrl = URL.createObjectURL(blob)
+        
+        // Extract filename from Content-Disposition header or use default
+        const contentDisposition = response.headers.get('Content-Disposition')
+        const filenameMatch = contentDisposition?.match(/filename="?(.+?)"?$/i)
+        const filename = filenameMatch ? filenameMatch[1] : `translated-${files[index].file.name}`
+        
+        result = {
+          status: 'success',
+          service: 'Azure Document Translation',
+          translatedDocument: downloadUrl,
+          filename: filename,
+          message: 'Document translated successfully. Click download to save.'
+        }
+      } else {
+        // All other modes return JSON
+        result = await response.json()
+      }
 
       setFiles(prev => prev.map((f, i) => 
-        i === index ? { ...f, status: 'completed' as const, result } : f
+        i === index ? { ...f, status: 'completed' as const, result: { ...result, blobUrl } } : f
       ))
     } catch (err) {
       setFiles(prev => prev.map((f, i) => 
@@ -265,9 +314,9 @@ function App() {
                 onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
                 style={{ marginRight: '0.5rem' }}
               />
-              <strong>Content Understanding</strong>
+              <strong>Azure AI Language</strong>
               <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
-                AI Foundry advanced OCR (preview)
+                Key phrase extraction from documents
               </div>
             </label>
             <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
@@ -507,16 +556,41 @@ function App() {
                       <summary style={{ cursor: 'pointer', color: '#667eea', fontWeight: '600' }}>
                         View Result
                       </summary>
-                      <pre style={{ 
-                        background: 'white', 
-                        padding: '0.5rem', 
-                        borderRadius: '4px', 
-                        fontSize: '0.75rem',
-                        overflow: 'auto',
-                        marginTop: '0.5rem'
-                      }}>
-                        {JSON.stringify(fileObj.result, null, 2)}
-                      </pre>
+                      
+                      {fileObj.result.translatedDocument ? (
+                        <div style={{ marginTop: '0.5rem' }}>
+                          <a
+                            href={fileObj.result.translatedDocument}
+                            download={fileObj.result.filename || 'translated-document.pdf'}
+                            style={{
+                              display: 'inline-block',
+                              background: '#10b981',
+                              color: 'white',
+                              padding: '0.5rem 1rem',
+                              borderRadius: '6px',
+                              textDecoration: 'none',
+                              fontWeight: '600',
+                              marginBottom: '0.5rem'
+                            }}
+                          >
+                            📥 Download Translated Document
+                          </a>
+                          <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                            {fileObj.result.message}
+                          </div>
+                        </div>
+                      ) : (
+                        <pre style={{ 
+                          background: 'white', 
+                          padding: '0.5rem', 
+                          borderRadius: '4px', 
+                          fontSize: '0.75rem',
+                          overflow: 'auto',
+                          marginTop: '0.5rem'
+                        }}>
+                          {JSON.stringify(fileObj.result, null, 2)}
+                        </pre>
+                      )}
                     </details>
                   )}
                 </div>

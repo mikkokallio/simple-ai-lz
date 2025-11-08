@@ -23,11 +23,11 @@ param(
     [string]$BackendImageTag = "latest"
 )
 
-Write-Host "🚀 Deploying OCR & Translation App" -ForegroundColor Cyan
+Write-Host "[INFO] Deploying OCR & Translation App" -ForegroundColor Cyan
 Write-Host "=================================" -ForegroundColor Cyan
 
 # Get existing resource IDs from the landing zone
-Write-Host "`n📋 Retrieving resource information..." -ForegroundColor Yellow
+Write-Host "`n[INFO] Retrieving resource information..." -ForegroundColor Yellow
 
 $containerAppsEnvId = az containerapp env show `
     --name "cae-ailz-$UniqueSuffix" `
@@ -72,31 +72,39 @@ $storageAccountResourceId = az storage account show `
     --resource-group $ResourceGroup `
     --query id -o tsv
 
-# AI Foundry (optional)
+# AI Foundry (use existing resource from rg-foundry for now)
 $aiFoundryEndpoint = ""
 $aiFoundryResourceId = ""
+$aiFoundryKey = ""
 try {
+    # For now, use the existing AI Foundry resource in rg-foundry
+    # TODO: Deploy AI Foundry resource in the same resource group via Bicep
     $aiFoundryEndpoint = az cognitiveservices account show `
-        --name "aif-ailz-$UniqueSuffix" `
-        --resource-group $ResourceGroup `
+        --name "foundry-mikkolabs" `
+        --resource-group "rg-foundry" `
         --query properties.endpoint -o tsv 2>$null
     
     $aiFoundryResourceId = az cognitiveservices account show `
-        --name "aif-ailz-$UniqueSuffix" `
-        --resource-group $ResourceGroup `
+        --name "foundry-mikkolabs" `
+        --resource-group "rg-foundry" `
         --query id -o tsv 2>$null
+    
+    $aiFoundryKey = az cognitiveservices account keys list `
+        --name "foundry-mikkolabs" `
+        --resource-group "rg-foundry" `
+        --query key1 -o tsv 2>$null
 } catch {
-    Write-Host "ℹ️  AI Foundry not found - skipping" -ForegroundColor Gray
+    Write-Host "[INFO] AI Foundry not found - skipping" -ForegroundColor Gray
 }
 
 # Container images
 $frontendImage = "$acrName.azurecr.io/ocr-translation-frontend:$FrontendImageTag"
 $backendImage = "$acrName.azurecr.io/ocr-translation-backend:$BackendImageTag"
 
-Write-Host "✅ Resources retrieved successfully" -ForegroundColor Green
+Write-Host "[OK] Resources retrieved successfully" -ForegroundColor Green
 
 # Deploy the app
-Write-Host "`n🏗️  Deploying Container Apps..." -ForegroundColor Yellow
+Write-Host "`n[INFO] Deploying Container Apps..." -ForegroundColor Yellow
 
 $deploymentName = "ocr-translation-app-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
@@ -110,6 +118,7 @@ az deployment group create `
     --parameters uniqueSuffix=$UniqueSuffix `
     --parameters acrPassword=$acrPassword `
     --parameters aiFoundryEndpoint=$aiFoundryEndpoint `
+    --parameters aiFoundryKey=$aiFoundryKey `
     --parameters documentIntelligenceEndpoint=$documentIntelligenceEndpoint `
     --parameters documentTranslatorEndpoint=$translatorEndpoint `
     --parameters aiFoundryResourceId=$aiFoundryResourceId `
@@ -121,7 +130,7 @@ az deployment group create `
     --parameters backendImage=$backendImage
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "`n✅ Deployment completed successfully!" -ForegroundColor Green
+    Write-Host "`n[SUCCESS] Deployment completed successfully!" -ForegroundColor Green
     
     # Get app URLs
     $frontendUrl = az deployment group show `
@@ -134,19 +143,19 @@ if ($LASTEXITCODE -eq 0) {
         --resource-group $ResourceGroup `
         --query properties.outputs.backendAppUrl.value -o tsv
     
-    Write-Host "`n🌐 Application URLs:" -ForegroundColor Cyan
+    Write-Host "`n[INFO] Application URLs:" -ForegroundColor Cyan
     Write-Host "   Frontend: $frontendUrl" -ForegroundColor White
     Write-Host "   Backend:  $backendUrl" -ForegroundColor White
-    Write-Host "`n⚠️  Remember: These apps are INTERNAL - connect via VPN to access" -ForegroundColor Yellow
+    Write-Host "`n[WARNING] Remember: These apps are INTERNAL - connect via VPN to access" -ForegroundColor Yellow
     
-    Write-Host "`n📋 RBAC Assignments Created:" -ForegroundColor Cyan
-    Write-Host "   ✅ Backend → Document Intelligence (Cognitive Services User)" -ForegroundColor Green
-    Write-Host "   ✅ Backend → Translator (Cognitive Services User)" -ForegroundColor Green
-    Write-Host "   ✅ Backend → Storage Account (Storage Blob Data Contributor)" -ForegroundColor Green
+    Write-Host "`n[INFO] RBAC Assignments Created:" -ForegroundColor Cyan
+    Write-Host "   [OK] Backend -> Document Intelligence (Cognitive Services User)" -ForegroundColor Green
+    Write-Host "   [OK] Backend -> Translator (Cognitive Services User)" -ForegroundColor Green
+    Write-Host "   [OK] Backend -> Storage Account (Storage Blob Data Contributor)" -ForegroundColor Green
     if ($aiFoundryResourceId) {
-        Write-Host "   ✅ Backend → AI Foundry (Cognitive Services User)" -ForegroundColor Green
+        Write-Host "   [OK] Backend -> AI Foundry (Cognitive Services User)" -ForegroundColor Green
     }
 } else {
-    Write-Host "`n❌ Deployment failed!" -ForegroundColor Red
+    Write-Host "`n[ERROR] Deployment failed!" -ForegroundColor Red
     exit 1
 }

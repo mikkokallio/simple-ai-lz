@@ -103,6 +103,23 @@ resource processedContainer 'Microsoft.Storage/storageAccounts/blobServices/cont
   }
 }
 
+// Translation source and target containers for Document Translation
+resource translationSourceContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+  parent: blobService
+  name: 'translation-source'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource translationTargetContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+  parent: blobService
+  name: 'translation-target'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // ============================================================================
 // MICROSOFT DEFENDER FOR STORAGE
 // ============================================================================

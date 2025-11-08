@@ -4,12 +4,14 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import axios from 'axios';
 import * as appInsights from 'applicationinsights';
 import { DefaultAzureCredential } from '@azure/identity';
-import { BlobServiceClient } from '@azure/storage-blob';
+import { BlobServiceClient, BlockBlobClient } from '@azure/storage-blob';
 import { OpenAI } from 'openai';
 import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
 import TextTranslationClient, { isUnexpected } from '@azure-rest/ai-translation-text';
+import DocumentTranslationClient, { isUnexpected as isUnexpectedDoc } from '@azure-rest/ai-translation-document';
 
 dotenv.config();
 
@@ -20,6 +22,7 @@ let blobServiceClient: BlobServiceClient | null = null;
 let openaiClient: OpenAI | null = null;
 let documentAnalysisClient: DocumentAnalysisClient | null = null;
 let translationClient: ReturnType<typeof TextTranslationClient> | null = null;
+let documentTranslationClient: ReturnType<typeof DocumentTranslationClient> | null = null;
 
 if (storageAccountName) {
   blobServiceClient = new BlobServiceClient(
@@ -63,11 +66,20 @@ if (process.env.TRANSLATOR_ENDPOINT) {
       process.env.TRANSLATOR_ENDPOINT,
       credential
     );
+    // Initialize Document Translation client with managed identity (for blob-based translation)
+    documentTranslationClient = DocumentTranslationClient(
+      process.env.TRANSLATOR_ENDPOINT,
+      credential
+    );
   } catch (err) {
     console.log('Failed to create Translator client with managed identity:', err);
     // Fall back to key-based auth if TRANSLATOR_KEY is set
     if (process.env.TRANSLATOR_KEY) {
       translationClient = TextTranslationClient(
+        process.env.TRANSLATOR_ENDPOINT,
+        new AzureKeyCredential(process.env.TRANSLATOR_KEY)
+      );
+      documentTranslationClient = DocumentTranslationClient(
         process.env.TRANSLATOR_ENDPOINT,
         new AzureKeyCredential(process.env.TRANSLATOR_KEY)
       );
@@ -195,26 +207,88 @@ app.post('/api/ocr/document-intelligence', upload.single('file'), async (req: Re
   }
 });
 
-// OCR endpoint - Content Understanding (AI Foundry)
-app.post('/api/ocr/content-understanding', async (req: Request, res: Response) => {
+// OCR endpoint - Azure AI Language (Key Phrase Extraction)
+app.post('/api/ocr/language-analysis', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    // MVP: Return stub response
+    if (!req.file) {
+      return res.status(400).json({ status: 'error', message: 'No file provided' });
+    }
+    if (!process.env.AI_FOUNDRY_ENDPOINT || !process.env.AI_FOUNDRY_KEY) {
+      return res.status(500).json({ status: 'error', message: 'AI Language endpoint/key not configured' });
+    }
+
+    // First extract text using Document Intelligence
+    if (!documentAnalysisClient) {
+      return res.status(500).json({ status: 'error', message: 'Document Intelligence not configured' });
+    }
+    const poller = await documentAnalysisClient.beginAnalyzeDocument('prebuilt-read', req.file.buffer);
+    const docResult = await poller.pollUntilDone();
+    const extractedText = docResult.content || '';
+
+    if (!extractedText) {
+      return res.status(400).json({ status: 'error', message: 'No text extracted from document' });
+    }
+
+    // Call Azure AI Language API for key phrase extraction
+    const aiFoundryEndpoint = process.env.AI_FOUNDRY_ENDPOINT?.replace(/\/$/, '');
+    const languageEndpoint = `${aiFoundryEndpoint}/language/:analyze-text?api-version=2022-05-01`;
+    
+    const languageRequest = {
+      kind: 'KeyPhraseExtraction',
+      parameters: {
+        modelVersion: 'latest'
+      },
+      analysisInput: {
+        documents: [
+          {
+            id: '1',
+            language: 'en',
+            text: extractedText
+          }
+        ]
+      }
+    };
+    
+    const languageHeaders = {
+      'Ocp-Apim-Subscription-Key': process.env.AI_FOUNDRY_KEY,
+      'Content-Type': 'application/json'
+    };
+    
+    const languageResponse = await axios.post(languageEndpoint, languageRequest, { headers: languageHeaders });
+    
     res.json({
       status: 'success',
-      message: 'Content Understanding OCR (MVP - stub response)',
-      endpoint: process.env.AI_FOUNDRY_ENDPOINT || 'Not configured',
-      note: 'Full implementation will use AI Foundry Content Understanding with managed identity'
+      service: 'Azure AI Language - Key Phrase Extraction',
+      text: extractedText,
+      keyPhrases: languageResponse.data.results?.documents?.[0]?.keyPhrases || [],
+      analysis: languageResponse.data
     });
   } catch (error) {
-    console.error('Error in content-understanding:', error);
+    console.error('Error in language-analysis:', error);
+    if (axios.isAxiosError(error)) {
+      console.error('Response status:', error.response?.status);
+      console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
+      console.error('Request URL:', error.config?.url);
+    }
     res.status(500).json({
       status: 'error',
-      message: 'Internal server error'
+      message: error instanceof Error ? error.message : 'Internal server error',
+      details: axios.isAxiosError(error) ? error.response?.data : undefined
     });
   }
 });
 
+// OCR endpoint - Content Understanding (stub/not implemented)
+app.post('/api/ocr/content-understanding', upload.single('file'), async (req: Request, res: Response) => {
+  res.status(501).json({
+    status: 'error',
+    message: 'Content Understanding OCR is not yet implemented',
+    note: 'This feature requires additional Azure AI services configuration'
+  });
+});
+
 // Translation endpoint - Azure Text Translation (synchronous, no blob needed)
+// Translation endpoint - Azure Document Translation (blob-based, supports all formats)
 app.post('/api/translate', upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
@@ -224,50 +298,155 @@ app.post('/api/translate', upload.single('file'), async (req: Request, res: Resp
       });
     }
 
-    if (!translationClient) {
+    if (!documentTranslationClient) {
       return res.status(500).json({
         status: 'error',
-        message: 'Translator not configured'
+        message: 'Document Translation not configured'
+      });
+    }
+
+    if (!blobServiceClient) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Storage not configured'
       });
     }
 
     const targetLanguage = req.body.targetLanguage || 'en';
     
-    // Convert file buffer to text (for text files)
-    // For more complex formats, you'd extract text first (e.g., using Document Intelligence)
-    const sourceText = req.file.buffer.toString('utf-8');
-
-    // Translate text using Azure Translator
-    const translateResponse = await translationClient.path('/translate').post({
-      body: [{ text: sourceText }],
-      queryParameters: {
-        to: targetLanguage,
-        'api-version': '3.0'
-      }
+    // Step 1: Upload file to source container
+    const sourceContainerName = 'translation-source';
+    const targetContainerName = 'translation-target';
+    const sourceContainerClient = blobServiceClient.getContainerClient(sourceContainerName);
+    
+    // Generate unique filename to avoid collisions
+    const timestamp = Date.now();
+    const sourceFileName = `${timestamp}-${req.file.originalname}`;
+    const sourceBlobClient = sourceContainerClient.getBlockBlobClient(sourceFileName);
+    
+    // Upload file buffer to blob
+    await sourceBlobClient.upload(req.file.buffer, req.file.buffer.length, {
+      blobHTTPHeaders: { blobContentType: req.file.mimetype }
     });
-
-    if (isUnexpected(translateResponse)) {
-      throw new Error(`Translation failed: ${translateResponse.body.error?.message || 'Unknown error'}`);
+    
+    console.log(`Uploaded source file to blob: ${sourceFileName}`);
+    
+    // Step 2: Submit translation job (NO SAS - managed identity)
+    const storageAccountUrl = `https://${storageAccountName}.blob.core.windows.net`;
+    const sourceUrl = `${storageAccountUrl}/${sourceContainerName}`;
+    const targetUrl = `${storageAccountUrl}/${targetContainerName}`;
+    
+    const batchRequest = {
+      inputs: [{
+        source: {
+          sourceUrl: sourceUrl,
+          filter: {
+            prefix: `${timestamp}-` // Only translate this file
+          }
+        },
+        targets: [{
+          targetUrl: targetUrl,
+          language: targetLanguage
+        }]
+      }]
+    };
+    
+    console.log('Submitting Document Translation job...');
+    const translationResponse = await documentTranslationClient.path('/document/batches').post({
+      body: batchRequest
+    });
+    
+    if (isUnexpectedDoc(translationResponse)) {
+      throw new Error(`Translation job submission failed: ${translationResponse.body.error?.message || 'Unknown error'}`);
     }
-
-    const translations = translateResponse.body;
-    const translatedText = translations[0]?.translations?.[0]?.text || '';
-    const detectedLanguage = translations[0]?.detectedLanguage;
-
-    res.json({
-      status: 'success',
-      service: 'Azure Translator',
-      sourceText: sourceText.substring(0, 500) + (sourceText.length > 500 ? '...' : ''),
-      translatedText,
-      detectedLanguage: {
-        language: detectedLanguage?.language,
-        score: detectedLanguage?.score
-      },
-      targetLanguage,
-      filename: req.file.originalname
-    });
+    
+    // Extract operation ID from operation-location header
+    // Format: https://<endpoint>/translator/document/batches/{id}?api-version=2024-05-01
+    const operationLocation = translationResponse.headers['operation-location'];
+    if (!operationLocation) {
+      throw new Error('No operation-location header in translation response');
+    }
+    
+    // Extract ID from URL path, removing query parameters
+    const urlParts = operationLocation.split('/');
+    const lastPart = urlParts[urlParts.length - 1]; // Gets "{id}?api-version=..."
+    const operationId = lastPart.split('?')[0]; // Remove query parameters
+    
+    if (!operationId) {
+      throw new Error('Failed to parse operation ID from translation response');
+    }
+    
+    console.log(`Translation job started with ID: ${operationId}`);
+    
+    // Step 3: Poll for completion (max 5 minutes)
+    const maxAttempts = 60; // 60 attempts * 5 seconds = 5 minutes
+    let attempts = 0;
+    let status = 'NotStarted';
+    let translatedDocumentUrl = '';
+    
+    while (attempts < maxAttempts && !['Succeeded', 'Failed', 'Cancelled'].includes(status)) {
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+      
+      const statusResponse = await documentTranslationClient.path('/document/batches/{id}', operationId).get();
+      
+      if (isUnexpectedDoc(statusResponse)) {
+        throw new Error('Failed to get translation status');
+      }
+      
+      status = statusResponse.body.status;
+      console.log(`Translation status: ${status} (attempt ${attempts + 1}/${maxAttempts})`);
+      
+      if (status === 'Succeeded') {
+        // Get document details
+        const documentsResponse = await documentTranslationClient.path('/document/batches/{id}/documents', operationId).get();
+        
+        if (isUnexpectedDoc(documentsResponse)) {
+          throw new Error('Failed to get translated documents');
+        }
+        
+        const documents = documentsResponse.body.value;
+        if (documents && documents.length > 0) {
+          // Find our document by matching the timestamp prefix
+          const doc = documents.find(d => d.sourcePath?.includes(sourceFileName));
+          if (doc) {
+            translatedDocumentUrl = doc.path || '';
+            console.log(`Translation succeeded. Document URL: ${translatedDocumentUrl}`);
+          }
+        }
+      } else if (status === 'Failed') {
+        const documentsResponse = await documentTranslationClient.path('/document/batches/{id}/documents', operationId).get();
+        let errorMessage = 'Translation failed';
+        
+        if (!isUnexpectedDoc(documentsResponse)) {
+          const documents = documentsResponse.body.value;
+          if (documents && documents.length > 0) {
+            const doc = documents[0];
+            errorMessage = doc.error?.message || errorMessage;
+          }
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      attempts++;
+    }
+    
+    if (status !== 'Succeeded') {
+      throw new Error(`Translation timed out or failed with status: ${status}`);
+    }
+    
+    // Step 4: Download translated document
+    const targetBlobClient = blobServiceClient.getContainerClient(targetContainerName).getBlockBlobClient(translatedDocumentUrl.split('/').pop()!);
+    const downloadResponse = await targetBlobClient.download();
+    const translatedBuffer = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    // Return translated document
+    res.setHeader('Content-Type', req.file.mimetype);
+    res.setHeader('Content-Disposition', `attachment; filename="translated-${req.file.originalname}"`);
+    res.send(translatedBuffer);
+    
   } catch (error) {
-    console.error('Error in translate:', error);
+    console.error('Error in Document Translation:', error);
     res.status(500).json({
       status: 'error',
       message: 'Translation failed',
@@ -275,6 +454,20 @@ app.post('/api/translate', upload.single('file'), async (req: Request, res: Resp
     });
   }
 });
+
+// Helper function to convert stream to buffer
+async function streamToBuffer(readableStream: NodeJS.ReadableStream): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    readableStream.on('data', (data: Buffer) => {
+      chunks.push(data);
+    });
+    readableStream.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+    readableStream.on('error', reject);
+  });
+}
 
 // Upload endpoint - Upload file to Azure Blob Storage
 app.post('/api/upload', upload.single('file'), async (req: Request, res: Response) => {

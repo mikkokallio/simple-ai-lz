@@ -4,9 +4,11 @@ A modern web application demonstrating Azure AI services for document processing
 
 ## Features
 
-- **Document Intelligence (OCR)** - Extract text and structure from documents using Azure Document Intelligence
-- **Content Understanding (Preview)** - Advanced document understanding with AI Foundry's Content Understanding service  
-- **Document Translation** - Translate documents between multiple languages using Azure Translator
+- **Document Intelligence OCR** - Extract text and structure from documents using Azure Document Intelligence
+- **Azure AI Language** - Extract key phrases from documents using Azure AI Language service
+- **OpenAI OCR** - Vision-based OCR using Azure OpenAI (requires configuration)
+- **Azure Translator** - Translate text between languages using Azure AI Translator
+- **OpenAI Translation** - AI-powered translation with custom prompts (requires configuration)
 
 ## Architecture
 
@@ -23,9 +25,10 @@ A modern web application demonstrating Azure AI services for document processing
                         ┌────────────────────────────────────────┐
                         │      Azure AI Services (Private)       │
                         ├────────────────────────────────────────┤
-                        │  • AI Foundry (Content Understanding)  │
+                        │  • AI Language (Key Phrase Extract.)  │
                         │  • Document Intelligence              │
-                        │  • Document Translator                │
+                        │  • Azure Translator                   │
+                        │  • Azure OpenAI (optional)            │
                         └────────────────────────────────────────┘
 ```
 

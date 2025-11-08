@@ -33,6 +33,10 @@ param documentTranslatorEndpoint string = ''
 @description('AI Foundry resource ID for RBAC')
 param aiFoundryResourceId string = ''
 
+@description('AI Foundry API key')
+@secure()
+param aiFoundryKey string = ''
+
 @description('Document Intelligence resource ID for RBAC')
 param documentIntelligenceResourceId string = ''
 
@@ -94,6 +98,10 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
           name: 'acr-password'
           value: acrPassword
         }
+        {
+          name: 'ai-foundry-key'
+          value: aiFoundryKey
+        }
       ]
       ingress: {
         external: true  // VNet-accessible (not public in internal environment)
@@ -127,6 +135,10 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'AI_FOUNDRY_ENDPOINT'
               value: aiFoundryEndpoint
+            }
+            {
+              name: 'AI_FOUNDRY_KEY'
+              secretRef: 'ai-foundry-key'
             }
             {
               name: 'DOCUMENT_INTELLIGENCE_ENDPOINT'
@@ -299,6 +311,17 @@ resource backendToStorageRbac 'Microsoft.Authorization/roleAssignments@2022-04-0
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
     principalId: backendApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// RBAC: Translator needs Storage access for Document Translation (managed identity - no SAS)
+resource translatorToStorageRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(documentTranslatorResourceId) && !empty(storageAccountResourceId)) {
+  name: guid(documentTranslatorResourceId, storageAccountResourceId, storageBlobDataContributorRoleId)
+  scope: storageAccountService
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalId: translatorService.identity.principalId
     principalType: 'ServicePrincipal'
   }
 }
