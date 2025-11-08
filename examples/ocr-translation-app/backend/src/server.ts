@@ -9,6 +9,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { OpenAI } from 'openai';
 import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
+import TextTranslationClient, { isUnexpected } from '@azure-rest/ai-translation-text';
 
 dotenv.config();
 
@@ -18,6 +19,7 @@ const storageAccountName = process.env.STORAGE_ACCOUNT_NAME || '';
 let blobServiceClient: BlobServiceClient | null = null;
 let openaiClient: OpenAI | null = null;
 let documentAnalysisClient: DocumentAnalysisClient | null = null;
+let translationClient: ReturnType<typeof TextTranslationClient> | null = null;
 
 if (storageAccountName) {
   blobServiceClient = new BlobServiceClient(
@@ -49,6 +51,25 @@ if (process.env.DOCUMENT_INTELLIGENCE_ENDPOINT) {
       documentAnalysisClient = new DocumentAnalysisClient(
         process.env.DOCUMENT_INTELLIGENCE_ENDPOINT,
         new AzureKeyCredential(process.env.DOCUMENT_INTELLIGENCE_KEY)
+      );
+    }
+  }
+}
+
+// Initialize Azure Translator client with managed identity
+if (process.env.TRANSLATOR_ENDPOINT) {
+  try {
+    translationClient = TextTranslationClient(
+      process.env.TRANSLATOR_ENDPOINT,
+      credential
+    );
+  } catch (err) {
+    console.log('Failed to create Translator client with managed identity:', err);
+    // Fall back to key-based auth if TRANSLATOR_KEY is set
+    if (process.env.TRANSLATOR_KEY) {
+      translationClient = TextTranslationClient(
+        process.env.TRANSLATOR_ENDPOINT,
+        new AzureKeyCredential(process.env.TRANSLATOR_KEY)
       );
     }
   }
@@ -193,21 +214,64 @@ app.post('/api/ocr/content-understanding', async (req: Request, res: Response) =
   }
 });
 
-// Translation endpoint
-app.post('/api/translate', async (req: Request, res: Response) => {
+// Translation endpoint - Azure Text Translation (synchronous, no blob needed)
+app.post('/api/translate', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    // MVP: Return stub response
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No file provided'
+      });
+    }
+
+    if (!translationClient) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Translator not configured'
+      });
+    }
+
+    const targetLanguage = req.body.targetLanguage || 'en';
+    
+    // Convert file buffer to text (for text files)
+    // For more complex formats, you'd extract text first (e.g., using Document Intelligence)
+    const sourceText = req.file.buffer.toString('utf-8');
+
+    // Translate text using Azure Translator
+    const translateResponse = await translationClient.path('/translate').post({
+      body: [{ text: sourceText }],
+      queryParameters: {
+        to: targetLanguage,
+        'api-version': '3.0'
+      }
+    });
+
+    if (isUnexpected(translateResponse)) {
+      throw new Error(`Translation failed: ${translateResponse.body.error?.message || 'Unknown error'}`);
+    }
+
+    const translations = translateResponse.body;
+    const translatedText = translations[0]?.translations?.[0]?.text || '';
+    const detectedLanguage = translations[0]?.detectedLanguage;
+
     res.json({
       status: 'success',
-      message: 'Document Translation (MVP - stub response)',
-      endpoint: process.env.TRANSLATOR_ENDPOINT || 'Not configured',
-      note: 'Full implementation will use Azure Translator SDK with managed identity'
+      service: 'Azure Translator',
+      sourceText: sourceText.substring(0, 500) + (sourceText.length > 500 ? '...' : ''),
+      translatedText,
+      detectedLanguage: {
+        language: detectedLanguage?.language,
+        score: detectedLanguage?.score
+      },
+      targetLanguage,
+      filename: req.file.originalname
     });
   } catch (error) {
     console.error('Error in translate:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Internal server error'
+      message: 'Translation failed',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
