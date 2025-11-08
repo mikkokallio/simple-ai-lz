@@ -1,0 +1,584 @@
+import React, { useEffect, useState } from 'react'
+import ReactDOM from 'react-dom/client'
+import './index.css'
+
+// Runtime configuration - can be set via nginx config injection
+declare global {
+  interface Window {
+    ENV?: {
+      BACKEND_URL?: string
+    }
+  }
+}
+
+const API_BASE_URL = window.ENV?.BACKEND_URL || import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'
+
+interface HealthStatus {
+  status: string
+  timestamp: string
+  environment: string
+  services: {
+    aiFoundry: boolean
+    documentIntelligence: boolean
+    translator: boolean
+  }
+}
+
+interface UploadedFile {
+  file: File
+  preview?: string
+  status: 'pending' | 'uploading' | 'uploaded' | 'processing' | 'completed' | 'error'
+  result?: any
+  error?: string
+}
+
+type ProcessingMode = 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai'
+
+const DEFAULT_SYSTEM_PROMPTS = {
+  'ocr-openai': 'You are an expert OCR system. Extract all text from the provided image with high accuracy. Maintain the original formatting, structure, and layout as much as possible. Return only the extracted text without any commentary or metadata.',
+  'translate-openai': 'You are an expert translator. Translate the provided text to the target language while maintaining the original meaning, tone, and style. Preserve formatting and structure. Return only the translated text.'
+}
+
+function App() {
+  const [health, setHealth] = useState<HealthStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [files, setFiles] = useState<UploadedFile[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
+  const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
+  const [targetLanguage, setTargetLanguage] = useState<string>('en')
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/health`)
+      .then(res => res.json())
+      .then(data => setHealth(data))
+      .catch(err => setError(err.message))
+  }, [])
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    
+    const droppedFiles = Array.from(e.dataTransfer.files)
+    addFiles(droppedFiles)
+  }
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const selectedFiles = Array.from(e.target.files)
+      addFiles(selectedFiles)
+    }
+  }
+
+  const addFiles = (newFiles: File[]) => {
+    const fileObjects: UploadedFile[] = newFiles.map(file => ({
+      file,
+      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+      status: 'pending'
+    }))
+    setFiles(prev => [...prev, ...fileObjects])
+  }
+
+  const processFile = async (index: number) => {
+    const fileToProcess = files[index]
+    if (!fileToProcess) return
+
+    // Update status to uploading
+    setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'uploading' as const } : f))
+
+    try {
+      // TODO: Upload to Azure Storage Blob via backend
+      // For now, send directly to backend API
+      
+      const formData = new FormData()
+      formData.append('file', fileToProcess.file)
+
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'processing' as const } : f))
+
+      let endpoint = ''
+      switch (processingMode) {
+        case 'ocr-di':
+          endpoint = '/api/ocr/document-intelligence'
+          break
+        case 'ocr-cu':
+          endpoint = '/api/ocr/content-understanding'
+          break
+        case 'ocr-openai':
+          endpoint = '/api/ocr/openai'
+          break
+        case 'translate':
+          endpoint = '/api/translate'
+          break
+        case 'translate-openai':
+          endpoint = '/api/translate/openai'
+          break
+      }
+
+      // Add system prompt for OpenAI modes
+      if (processingMode === 'ocr-openai' || processingMode === 'translate-openai') {
+        formData.append('systemPrompt', systemPrompt)
+        if (processingMode === 'translate-openai') {
+          formData.append('targetLanguage', targetLanguage)
+        }
+      } else if (processingMode === 'translate') {
+        formData.append('targetLanguage', targetLanguage)
+      }
+
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        body: formData
+      })
+
+      const result = await response.json()
+
+      setFiles(prev => prev.map((f, i) => 
+        i === index ? { ...f, status: 'completed' as const, result } : f
+      ))
+    } catch (err) {
+      setFiles(prev => prev.map((f, i) => 
+        i === index ? { 
+          ...f, 
+          status: 'error' as const, 
+          error: err instanceof Error ? err.message : 'Unknown error' 
+        } : f
+      ))
+    }
+  }
+
+  const removeFile = (index: number) => {
+    setFiles(prev => {
+      const newFiles = [...prev]
+      if (newFiles[index].preview) {
+        URL.revokeObjectURL(newFiles[index].preview!)
+      }
+      newFiles.splice(index, 1)
+      return newFiles
+    })
+  }
+
+  const processAll = () => {
+    files.forEach((_, index) => {
+      if (files[index].status === 'pending') {
+        processFile(index)
+      }
+    })
+  }
+
+  return (
+    <div style={{ 
+      minHeight: '100vh', 
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      padding: '2rem',
+      fontFamily: 'system-ui, -apple-system, sans-serif'
+    }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        {/* Header */}
+        <div style={{ textAlign: 'center', color: 'white', marginBottom: '2rem' }}>
+          <h1 style={{ fontSize: '2.5rem', fontWeight: '700', marginBottom: '0.5rem' }}>
+            📄 OCR & Translation
+          </h1>
+          <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
+            Upload documents for OCR or translation
+          </p>
+          <p style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '0.5rem' }}>
+            Backend: <code style={{ background: 'rgba(255,255,255,0.2)', padding: '2px 8px', borderRadius: '4px' }}>
+              {API_BASE_URL}
+            </code>
+          </p>
+        </div>
+
+        {/* Health Status */}
+        {error && (
+          <div style={{ 
+            background: '#fee', 
+            padding: '1rem', 
+            borderRadius: '8px', 
+            color: '#c00',
+            marginBottom: '1rem',
+            textAlign: 'center'
+          }}>
+            ⚠️ Backend Error: {error}
+          </div>
+        )}
+
+        {health && (
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            padding: '1.5rem', 
+            borderRadius: '12px',
+            marginBottom: '2rem',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          }}>
+            <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>Backend Status: <span style={{ color: '#10b981' }}>●</span> {health.status}</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+              <div>
+                <strong>AI Foundry:</strong> {health.services.aiFoundry ? '✅ Ready' : '⚠️ Not configured'}
+              </div>
+              <div>
+                <strong>Document Intelligence:</strong> {health.services.documentIntelligence ? '✅ Ready' : '⚠️ Not configured'}
+              </div>
+              <div>
+                <strong>Translator:</strong> {health.services.translator ? '✅ Ready' : '⚠️ Not configured'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Processing Mode Selector */}
+        <div style={{ 
+          background: 'rgba(255, 255, 255, 0.95)', 
+          padding: '1.5rem', 
+          borderRadius: '12px',
+          marginBottom: '2rem',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        }}>
+          <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>Processing Mode</h3>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                value="ocr-di" 
+                checked={processingMode === 'ocr-di'} 
+                onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
+                style={{ marginRight: '0.5rem' }}
+              />
+              <strong>Document Intelligence OCR</strong>
+              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
+                Azure AI Document Intelligence service
+              </div>
+            </label>
+            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                value="ocr-cu" 
+                checked={processingMode === 'ocr-cu'} 
+                onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
+                style={{ marginRight: '0.5rem' }}
+              />
+              <strong>Content Understanding</strong>
+              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
+                AI Foundry advanced OCR (preview)
+              </div>
+            </label>
+            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                value="ocr-openai" 
+                checked={processingMode === 'ocr-openai'} 
+                onChange={(e) => {
+                  setProcessingMode(e.target.value as ProcessingMode)
+                  setSystemPrompt(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
+                }}
+                style={{ marginRight: '0.5rem' }}
+              />
+              <strong>OpenAI Vision OCR</strong>
+              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
+                GPT-4 Vision for OCR with custom prompts
+              </div>
+            </label>
+            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                value="translate" 
+                checked={processingMode === 'translate'} 
+                onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
+                style={{ marginRight: '0.5rem' }}
+              />
+              <strong>Azure Translator</strong>
+              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
+                Azure AI Translator service
+              </div>
+            </label>
+            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                value="translate-openai" 
+                checked={processingMode === 'translate-openai'} 
+                onChange={(e) => {
+                  setProcessingMode(e.target.value as ProcessingMode)
+                  setSystemPrompt(DEFAULT_SYSTEM_PROMPTS['translate-openai'])
+                }}
+                style={{ marginRight: '0.5rem' }}
+              />
+              <strong>OpenAI Translation</strong>
+              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
+                GPT-4 translation with custom prompts
+              </div>
+            </label>
+          </div>
+
+          {/* System Prompt for OpenAI modes */}
+          {(processingMode === 'ocr-openai' || processingMode === 'translate-openai') && (
+            <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #e5e7eb' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#333' }}>
+                System Prompt
+              </label>
+              <textarea
+                value={systemPrompt}
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                rows={4}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid #d1d5db',
+                  fontFamily: 'monospace',
+                  fontSize: '0.9rem',
+                  resize: 'vertical'
+                }}
+                placeholder="Enter custom system prompt..."
+              />
+            </div>
+          )}
+
+          {/* Target Language for translation modes */}
+          {(processingMode === 'translate' || processingMode === 'translate-openai') && (
+            <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #e5e7eb' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#333' }}>
+                Target Language
+              </label>
+              <select
+                value={targetLanguage}
+                onChange={(e) => setTargetLanguage(e.target.value)}
+                style={{
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid #d1d5db',
+                  fontSize: '1rem',
+                  minWidth: '200px'
+                }}
+              >
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="it">Italian</option>
+                <option value="pt">Portuguese</option>
+                <option value="nl">Dutch</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+                <option value="zh-Hans">Chinese (Simplified)</option>
+                <option value="zh-Hant">Chinese (Traditional)</option>
+                <option value="ar">Arabic</option>
+                <option value="ru">Russian</option>
+                <option value="fi">Finnish</option>
+                <option value="sv">Swedish</option>
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* Upload Area */}
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          style={{
+            background: isDragging ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.95)',
+            border: isDragging ? '3px dashed #667eea' : '3px dashed transparent',
+            borderRadius: '16px',
+            padding: '3rem',
+            textAlign: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.3s ease',
+            marginBottom: '2rem',
+            boxShadow: '0 8px 16px rgba(0,0,0,0.1)'
+          }}
+        >
+          <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>📎</div>
+          <h2 style={{ color: '#333', marginBottom: '1rem' }}>
+            {isDragging ? 'Drop files here' : 'Drag & Drop files here'}
+          </h2>
+          <p style={{ color: '#666', marginBottom: '1.5rem' }}>or</p>
+          <label style={{
+            background: '#667eea',
+            color: 'white',
+            padding: '0.75rem 2rem',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            display: 'inline-block',
+            fontWeight: '600',
+            transition: 'all 0.2s ease'
+          }}>
+            Browse Files
+            <input
+              type="file"
+              multiple
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+              accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp"
+            />
+          </label>
+          <p style={{ color: '#999', fontSize: '0.85rem', marginTop: '1rem' }}>
+            Supported: PDF, PNG, JPG, TIFF, BMP
+          </p>
+        </div>
+
+        {/* Files List */}
+        {files.length > 0 && (
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            padding: '1.5rem', 
+            borderRadius: '12px',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0, color: '#333' }}>Uploaded Files ({files.length})</h3>
+              <button
+                onClick={processAll}
+                disabled={files.every(f => f.status !== 'pending')}
+                style={{
+                  background: files.every(f => f.status !== 'pending') ? '#ccc' : '#10b981',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.5rem 1.5rem',
+                  borderRadius: '6px',
+                  cursor: files.every(f => f.status !== 'pending') ? 'not-allowed' : 'pointer',
+                  fontWeight: '600'
+                }}
+              >
+                Process All
+              </button>
+            </div>
+            
+            {files.map((fileObj, index) => (
+              <div key={index} style={{
+                background: '#f9fafb',
+                padding: '1rem',
+                borderRadius: '8px',
+                marginBottom: '0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '1rem'
+              }}>
+                {fileObj.preview && (
+                  <img src={fileObj.preview} alt="preview" style={{ 
+                    width: '60px', 
+                    height: '60px', 
+                    objectFit: 'cover', 
+                    borderRadius: '4px' 
+                  }} />
+                )}
+                {!fileObj.preview && (
+                  <div style={{ 
+                    width: '60px', 
+                    height: '60px', 
+                    background: '#e5e7eb', 
+                    borderRadius: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1.5rem'
+                  }}>
+                    📄
+                  </div>
+                )}
+                
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: '600', color: '#333' }}>{fileObj.file.name}</div>
+                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                    {(fileObj.file.size / 1024).toFixed(1)} KB
+                  </div>
+                  <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                    Status: <span style={{ 
+                      color: fileObj.status === 'completed' ? '#10b981' : 
+                             fileObj.status === 'error' ? '#ef4444' : '#667eea',
+                      fontWeight: '600'
+                    }}>
+                      {fileObj.status === 'pending' && '⏸️ Pending'}
+                      {fileObj.status === 'uploading' && '⬆️ Uploading...'}
+                      {fileObj.status === 'processing' && '⚙️ Processing...'}
+                      {fileObj.status === 'completed' && '✅ Completed'}
+                      {fileObj.status === 'error' && `❌ Error: ${fileObj.error}`}
+                    </span>
+                  </div>
+                  {fileObj.result && (
+                    <details style={{ marginTop: '0.5rem' }}>
+                      <summary style={{ cursor: 'pointer', color: '#667eea', fontWeight: '600' }}>
+                        View Result
+                      </summary>
+                      <pre style={{ 
+                        background: 'white', 
+                        padding: '0.5rem', 
+                        borderRadius: '4px', 
+                        fontSize: '0.75rem',
+                        overflow: 'auto',
+                        marginTop: '0.5rem'
+                      }}>
+                        {JSON.stringify(fileObj.result, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {fileObj.status === 'pending' && (
+                    <button
+                      onClick={() => processFile(index)}
+                      style={{
+                        background: '#667eea',
+                        color: 'white',
+                        border: 'none',
+                        padding: '0.5rem 1rem',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: '600'
+                      }}
+                    >
+                      Process
+                    </button>
+                  )}
+                  <button
+                    onClick={() => removeFile(index)}
+                    style={{
+                      background: '#ef4444',
+                      color: 'white',
+                      border: 'none',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontWeight: '600'
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* MVP Notice */}
+        <div style={{ 
+          marginTop: '2rem', 
+          background: 'rgba(255, 255, 255, 0.9)', 
+          padding: '1rem', 
+          borderRadius: '8px',
+          textAlign: 'center',
+          color: '#666'
+        }}>
+          <p style={{ margin: 0, fontSize: '0.85rem' }}>
+            ⚠️ MVP Version: Storage upload and actual AI processing will be implemented next
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
+

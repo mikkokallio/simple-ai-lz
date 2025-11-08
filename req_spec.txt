@@ -1,0 +1,616 @@
+================================================================================
+AZURE AI LANDING ZONE - REQUIREMENTS SPECIFICATION
+================================================================================
+
+Project: Simple AI Landing Zone (AI-LZ)
+Version: 1.0
+Date: November 7, 2025
+Infrastructure as Code: Azure Bicep
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+This specification defines a secure, cost-optimized Azure landing zone designed
+for AI-powered applications. The architecture prioritizes security through
+private networking (VNet isolation), managed identities, and minimal use of
+key-based authentication. The platform uses Azure Container Apps for compute,
+Azure AI Foundry for AI capabilities, and includes governance controls.
+
+ENVIRONMENT PURPOSE: This is a shared, multi-application LAB environment for
+demonstration and customer showcase purposes. It provides a production-like
+setup with proper security controls but optimized for low-volume usage and
+cost efficiency. The environment is managed by a single operator and hosts
+multiple AI-powered applications simultaneously.
+
+DESIGN PHILOSOPHY: Production-grade architecture with lab-scale resources.
+No separate dev/test/prod environments needed - this single "lab" environment
+balances realistic production patterns with minimal operational costs.
+
+DEPLOYMENT REGION: Default deployment region is swedencentral, which provides
+modern datacenter infrastructure with full AI service capacity and availability.
+Regions westeurope and northeurope are NOT recommended due to Microsoft's 
+guidance about capacity constraints in those older datacenters.
+
+================================================================================
+2. CORE PRINCIPLES
+================================================================================
+
+2.1 Security First
+    - All services communicate via private endpoints within VNet
+    - No public internet exposure for backend services
+    - Managed Identity for all service-to-service authentication
+    - No SAS tokens or access keys in application code
+    - Zero Trust network architecture
+    - Malware scanning for all file uploads
+    - Microsoft Entra ID (Azure AD) for user authentication
+    - OAuth 2.0 / OIDC for application access control
+
+2.2 Cost Optimization
+    - Use consumption-based services where possible
+    - Implement auto-scaling with appropriate limits
+    - Core services always deployed; costly add-ons optional
+    - Single lab environment (no separate dev/test/prod)
+    - Lowest feasible SKUs while maintaining production-like capabilities
+    - Resource sharing across multiple applications
+
+2.3 Infrastructure as Code
+    - All resources defined in Bicep templates
+    - Parameterized deployments for different environments
+    - Interactive prompts for optional expensive components
+    - Idempotent and repeatable deployments
+
+2.4 Governance & Compliance
+    - Azure Policy enforcement
+    - Resource tagging strategy
+    - Diagnostic logging to Log Analytics
+    - Security Center/Defender integration
+
+================================================================================
+3. ARCHITECTURE OVERVIEW
+================================================================================
+
+3.1 Network Architecture
+    - Hub-Spoke or Single VNet topology (based on scale)
+    - Subnets:
+      * Azure Container Apps subnet
+      * Private endpoints subnet
+      * Azure Bastion subnet (optional, for management)
+      * Application Gateway subnet (if deployed)
+    - Network Security Groups (NSGs) on all subnets
+    - Service Endpoints and Private Endpoints for Azure services
+    - Azure DNS Private Zones for private endpoint resolution
+    - Allow outbound HTTPS (443) for Entra ID authentication endpoints
+
+3.2 Compute Layer
+    - Azure Container Apps Environment (consumption-based, shared)
+      * Multiple frontend container apps (one per application)
+      * Multiple backend API container apps (one per application)
+      * Worker/job container apps for async processing
+      * All apps share the same Container Apps Environment for cost efficiency
+      * Built-in authentication support (Easy Auth) for Entra ID integration
+    - Internal load balancing within Container Apps Environment
+    - VNet integration for all container apps
+    - Workload profiles: Consumption (default), Dedicated (optional)
+    - Application isolation via separate container apps, not separate environments
+    - HTTPS ingress with automatic certificate management
+
+3.3 AI Services Layer
+    - Azure AI Foundry (formerly Azure AI Studio)
+      * AI Hub for centralized AI resource management (shared across apps)
+      * AI Projects for specific use cases (one per application)
+      * Model deployments (OpenAI, custom models)
+      * Prompt Flow orchestration
+      * Vector search capabilities
+      * Microsoft Agentic Framework support
+    - Azure AI Services (multi-service resource)
+      * Document Intelligence for text extraction
+      * Translator for document translation
+      * Computer Vision for image analysis
+      * Speech services (optional)
+      * Content Safety for moderation
+    - Private endpoints for all AI services
+    - Managed Identity access from Container Apps to AI services
+
+3.4 Data & Storage Layer
+    - Azure Storage Account (Standard, LRS for lab, ZRS for higher reliability)
+      * Multiple blob containers (one per application or use case)
+      * Separate containers for raw uploads, processed documents, translations
+      * Private endpoint for blob access
+      * Microsoft Defender for Storage (malware scanning on upload)
+      * Immutable storage policies (optional)
+      * Lifecycle management policies for automatic cleanup
+      * Container-level access isolation using RBAC
+    - Azure Key Vault (shared across applications)
+      * Secrets management (API keys, connection strings if needed)
+      * Certificate storage (including SSL/TLS certs for custom domains)
+      * OAuth client secrets for Entra ID app registrations
+      * Private endpoint access
+      * RBAC-based access (no access policies)
+      * Soft delete and purge protection enabled
+      * Separate secret prefixes per application for organization
+
+3.5 Identity & Authentication Infrastructure
+    - Microsoft Entra ID (Azure AD) - Tenant level (existing)
+      * No additional cost for basic authentication
+      * App Registrations for each application requiring authentication
+      * Service Principal for CI/CD (optional)
+    
+    - Container Apps Built-in Authentication (Easy Auth)
+      * Configured per Container App that requires user authentication
+      * Integrated with Entra ID via OIDC
+      * Handles token validation and user identity
+      * No additional cost (part of Container Apps)
+      * Supports multiple identity providers (Entra ID primary)
+    
+    - API Management OAuth 2.0 Authorization
+      * JWT validation policy for API protection
+      * Integration with Entra ID for token validation
+      * Validates access tokens from authenticated users
+      * No additional licensing cost
+
+    Note: App Registrations are created per application, NOT by the landing
+    zone deployment. However, the infrastructure supports authentication patterns.
+
+3.6 Optional Components (Cost-Sensitive)
+    The Bicep deployment will prompt for inclusion of these components:
+    
+    a) Azure Cosmos DB
+       - Purpose: Globally distributed, low-latency document database
+       - Cost: ~$25-100+/month depending on RUs
+       - Use case: High-performance application data, conversation history
+       - Configuration: Serverless or Provisioned throughput
+       - Private endpoint required
+       - Automatic failover (optional)
+    
+    b) Azure Application Gateway + WAF
+       - Purpose: Layer 7 load balancing, SSL termination, WAF protection
+       - Cost: ~$150-300+/month
+       - Use case: Public-facing web application with DDoS/WAF protection
+       - Configuration: WAF_v2 SKU, autoscaling
+       - Integration with Container Apps via private endpoint
+       - Custom domain and SSL certificate management
+       - Can integrate with Entra ID authentication for additional protection
+    
+    c) Azure Bastion
+       - Purpose: Secure RDP/SSH access to management VMs (if needed)
+       - Cost: ~$140/month
+       - Use case: Troubleshooting, management access
+
+================================================================================
+4. API MANAGEMENT (APIM) INTEGRATION
+================================================================================
+
+4.1 Purpose & Role
+    - Centralized API gateway for all backend services across applications
+    - Abstraction layer between frontend and backend services
+    - Policy enforcement point (rate limiting, authentication, transformation)
+    - Enable Model Context Protocol (MCP) server patterns
+    - API versioning and documentation (shared API catalog)
+    - Single entry point for all application APIs with path-based routing
+    - Enables cross-application API discovery for demos
+
+4.2 Configuration
+    - Consumption tier (cost-optimized) or Developer tier for testing
+    - VNet integration in Internal mode
+    - Private endpoint exposure to Container Apps
+    - Backend connections to Container Apps via VNet
+    - Managed Identity for accessing backend services and AI Foundry
+
+4.3 MCP Server Integration
+    - APIM acts as MCP server proxy layer
+    - Standardized API contracts for AI agent interactions
+    - Tools and resources exposed via APIM endpoints
+    - Structured request/response formatting for LLM consumption
+    - Context management and session handling
+    - OAuth 2.0 tokens passed through to backend services
+
+4.4 Security Policies
+    - OAuth 2.0 / JWT validation against Entra ID
+      * validate-jwt policy configured with Entra ID tenant
+      * Validates access tokens from client applications
+      * Extracts user claims for backend authorization
+    - Rate limiting per subscription/user/IP
+    - Request/response transformation
+    - IP filtering (if needed)
+    - CORS policies for web applications
+    - Logging to Application Insights with user context
+
+================================================================================
+5. SECURITY CONTROLS
+================================================================================
+
+5.1 Identity & Access Management
+    
+    Infrastructure (Service-to-Service):
+    - System-Assigned Managed Identity for all Azure services
+    - Azure RBAC for resource access control
+    - No shared access keys or connection strings
+    - Service Principal (optional) for deployment pipelines
+    
+    Application (User Authentication):
+    - Microsoft Entra ID (Azure AD) as primary identity provider
+    - OAuth 2.0 / OpenID Connect (OIDC) for user authentication
+    - App Registrations per application (created separately)
+      * Client ID and tenant ID stored in Key Vault
+      * Client secrets stored in Key Vault (if required)
+      * Redirect URIs configured for Container Apps domains
+    - Container Apps Easy Auth for frontend applications
+      * Automatic token acquisition and validation
+      * User identity passed to backend via headers
+    - APIM JWT validation for API protection
+      * Validates tokens issued by Entra ID
+      * Enforces authentication before backend access
+    - Role-based access control (RBAC) at application level
+      * Entra ID groups/roles used for authorization
+      * Claims-based authorization in application code
+    - Conditional Access policies (optional, requires Entra ID P1)
+      * Multi-factor authentication (MFA)
+      * Device compliance checks
+      * Location-based access restrictions
+
+5.2 Network Security
+    - No public IPs except App Gateway (if deployed)
+    - Private endpoints for all PaaS services:
+      * Storage Account
+      * Key Vault
+      * Container Registry (if used)
+      * Cosmos DB (if deployed)
+      * AI Foundry endpoints
+    - NSG rules limiting traffic to required flows
+    - Azure Firewall (optional, for hub-spoke)
+    - DDoS Protection (optional, standard tier)
+
+5.3 Data Protection
+    - Encryption at rest (Azure Storage Service Encryption)
+    - TLS 1.2+ for all data in transit
+    - Microsoft Defender for Storage with malware scanning
+    - Key Vault for secrets and certificates
+    - No hardcoded credentials in code or config
+
+5.4 Malware Scanning
+    - Azure Defender for Storage enabled
+    - On-upload scanning for blob storage
+    - Quarantine container for suspicious files
+    - Event Grid notifications for scan results
+    - Automated response to malware detection
+
+5.5 Threat Detection & Monitoring
+    - Microsoft Defender for Cloud enabled
+    - Azure Monitor for metrics and logs
+    - Log Analytics Workspace for centralized logging
+    - Application Insights for application telemetry
+    - Diagnostic settings on all resources
+    - Alert rules for security events
+
+================================================================================
+6. GOVERNANCE & COMPLIANCE
+================================================================================
+
+6.1 Azure Policy Assignments
+    - Require tags on resources (environment, cost-center, owner)
+    - Enforce allowed locations (swedencentral preferred)
+      * swedencentral: Recommended - modern DC with full AI capacity
+      * westeurope/northeurope: NOT recommended due to capacity constraints
+    - Require encryption for storage accounts
+    - Require private endpoints for PaaS services
+    - Deny public network access where possible
+    - Require soft delete on Key Vault
+    - Enforce naming conventions
+    - Require diagnostic logs for all resources
+
+6.2 Resource Organization
+    - Single Resource Group for simplicity: rg-ailz-lab
+    - All resources in one resource group for:
+      * Easier management by single operator
+      * Simplified RBAC assignments
+      * Faster deployment and deletion
+      * Lower cognitive overhead for demos
+    - Resource naming convention includes app identifier:
+      * aca-ailz-<appname>-<function> (e.g., aca-ailz-doctrans-web)
+      * st-ailz-<uniqueid> (shared storage)
+      * apim-ailz-lab (shared APIM)
+      * etc.
+
+6.3 Tagging Strategy
+    Required tags on all resources:
+    - Environment: lab
+    - Purpose: demo | showcase | learning
+    - Owner: <email>
+    - Project: AI-LZ
+    - ManagedBy: Bicep
+    - CreatedDate: <ISO8601>
+    
+    Optional tags for tracking:
+    - Application: <app-name> (for app-specific resources like container apps)
+    - Shared: true | false (indicates if resource is shared across apps)
+
+6.4 Cost Management
+    - Budget alerts at 50%, 80%, 100% of monthly budget
+    - Resource locks on production resources (CanNotDelete)
+    - Auto-shutdown policies for non-production (optional)
+    - Commitment-based discounts (reserved instances) for predictable workloads
+
+================================================================================
+7. BICEP IMPLEMENTATION REQUIREMENTS
+================================================================================
+
+7.1 Module Structure
+    - main.bicep: Orchestration template
+    - modules/network.bicep: VNet, subnets, NSGs
+    - modules/containerApps.bicep: Container Apps Environment (shared)
+    - modules/ai.bicep: AI Foundry hub and AI Services (shared)
+    - modules/storage.bicep: Storage account with security (shared)
+    - modules/keyvault.bicep: Key Vault configuration (shared)
+    - modules/apim.bicep: API Management setup with OAuth policies (shared)
+    - modules/monitoring.bicep: Log Analytics, App Insights (shared)
+    - modules/optional/cosmosdb.bicep: Optional Cosmos DB (shared)
+    - modules/optional/appgateway.bicep: Optional App Gateway + WAF
+    - modules/optional/bastion.bicep: Optional Azure Bastion
+    
+    Note: Most resources are shared infrastructure. Individual container apps
+    will be deployed separately per application, not as part of this landing zone.
+    App Registrations in Entra ID are also created separately per application.
+
+7.2 Parameters
+    Core parameters (required):
+    - location: string (Azure region, default: swedencentral)
+      * swedencentral is RECOMMENDED - modern DC with full AI capacity
+      * westeurope and northeurope NOT recommended (capacity constraints)
+    - uniqueSuffix: string (for globally unique names)
+    - ownerEmail: string (for tagging)
+    - entraIdTenantId: string (Azure AD tenant ID for OAuth configuration)
+    - tags: object (base tags)
+
+    Optional component flags (prompted during deployment):
+    - deployCosmosDb: bool (default: false)
+    - deployAppGateway: bool (default: false)
+    - deployBastion: bool (default: false)
+    - enableDDoSProtection: bool (default: false)
+
+    Configuration parameters:
+    - vnetAddressPrefix: string (default: '10.0.0.0/16')
+    - allowedIPRanges: array (for NSG rules, if App Gateway deployed)
+    - containerAppsSubnetPrefix: string (default: '10.0.0.0/23')
+    - privateEndpointSubnetPrefix: string (default: '10.0.2.0/24')
+    - appGatewaySubnetPrefix: string (default: '10.0.4.0/24')
+    
+    Note: environmentName is fixed to 'lab'
+
+7.3 Outputs
+    - vnetId: Resource ID of VNet
+    - containerAppsEnvironmentId: Resource ID of Container Apps Environment
+    - containerAppsDefaultDomain: Default domain for Container Apps
+    - storageAccountName: Name of storage account
+    - keyVaultUri: URI of Key Vault
+    - keyVaultName: Name of Key Vault
+    - aiFoundryHubId: Resource ID of AI Hub
+    - apimGatewayUrl: APIM gateway URL (internal)
+    - apimName: Name of APIM instance
+    - applicationInsightsConnectionString: For application telemetry
+    - entraIdTenantId: Entra ID tenant ID (for app setup documentation)
+
+7.4 Deployment Experience
+    - Interactive prompts for optional components using allowed values
+    - Clear descriptions for each parameter
+    - Validation for network CIDR ranges (no overlaps)
+    - Pre-deployment validation (what-if)
+    - Estimated cost output before confirmation
+    - Deployment time: ~15-30 minutes
+
+================================================================================
+8. OPERATIONAL CONSIDERATIONS
+================================================================================
+
+8.1 Monitoring & Observability
+    - Centralized logging to Log Analytics
+    - Application Insights for distributed tracing
+    - Custom dashboards in Azure Monitor
+    - Alerts for:
+      * High error rates
+      * Resource exhaustion
+      * Security events
+      * Budget thresholds
+
+8.2 Backup & Disaster Recovery
+    - Geo-redundant storage (optional, ZRS/GRS)
+    - Key Vault soft delete (90-day retention)
+    - Container image registry with geo-replication (optional)
+    - Documentation for disaster recovery procedures
+
+8.3 Maintenance Windows
+    - Auto-patching for PaaS services (managed by Azure)
+    - Container image updates via CI/CD pipeline
+    - Planned maintenance notifications
+
+8.4 Scaling Strategy
+    - Container Apps: Auto-scale based on HTTP traffic or CPU/Memory
+    - Cosmos DB: Serverless (auto-scale) or autoscale provisioned throughput
+    - APIM: Consumption tier auto-scales
+    - Storage: No scaling needed (PaaS)
+
+================================================================================
+9. COST ESTIMATION (Monthly, USD, Approximate)
+================================================================================
+
+9.1 Core Components (Always Deployed)
+    - Azure Container Apps Environment:    $0 (consumption, shared)
+    - Container Apps (low usage):          $10-30 (shared environment, lab volumes)
+    - Azure AI Foundry Hub:                $0 (management plane)
+    - Azure AI Services (multi-service):   ~$0-50 (pay-per-transaction, low volume)
+    - AI model deployments (OpenAI):       Variable (pay-per-token, estimate $20-100)
+    - Storage Account (Standard LRS):      $5-15 (low volume, multiple containers)
+    - Microsoft Defender for Storage:      ~$10/month (per storage account)
+    - Key Vault:                           $0.03 per 10k operations (~$1-2)
+    - API Management (Consumption):        $3.50 per million calls (~$5-10 lab usage)
+    - Log Analytics:                       $2.30/GB ingested (~$10-20)
+    - Application Insights:                First 5GB/month free (~$5-10)
+    - Virtual Network:                     $0 (VNet itself is free)
+    - Private Endpoints:                   $7.30 each * ~6-7 = $44-51
+
+    TOTAL CORE: ~$115-250/month (including modest AI usage for demos)
+    
+    Cost Note: Shared infrastructure across multiple apps keeps costs low.
+    Individual app deployments add minimal incremental cost (mostly compute).
+
+9.2 Optional Components
+    - Azure Cosmos DB (Serverless):        $25-100+/month (depends on usage)
+    - Azure Cosmos DB (Provisioned 400 RU): ~$24/month minimum
+    - Application Gateway + WAF:           $150-300/month
+    - Azure Bastion (Basic):               $140/month
+    - DDoS Protection Standard:            $2,944/month (usually not needed)
+
+    TOTAL WITH ALL OPTIONAL: ~$450-700+/month
+
+9.3 Cost Optimization Notes
+    - Use consumption-based services where possible
+    - Enable auto-pause for non-production environments
+    - Set up budget alerts
+    - Review Azure Advisor recommendations monthly
+    - Consider Azure Reservations for predictable workloads (1-3 year commits)
+
+================================================================================
+10. SUCCESS CRITERIA
+================================================================================
+
+10.1 Security
+    ✓ No public endpoints except Application Gateway (if deployed)
+    ✓ All service communication via private endpoints
+    ✓ Managed Identity authentication throughout
+    ✓ Malware scanning operational on storage
+    ✓ Azure Policies enforced
+
+10.2 Functionality
+    ✓ Container Apps can access AI Foundry via Managed Identity
+    ✓ APIM successfully routes requests to Container Apps
+    ✓ APIM JWT validation works with Entra ID tokens
+    ✓ Container Apps Easy Auth redirects to Entra ID login
+    ✓ Authenticated user identity flows through the stack
+    ✓ File uploads to Storage work with malware scanning
+    ✓ Secrets stored in Key Vault, accessible via Managed Identity
+    ✓ End-to-end application flow operational with authentication
+
+10.3 Deployment
+    ✓ Bicep deployment completes without errors
+    ✓ Optional components deploy based on user selection
+    ✓ All resources properly tagged
+    ✓ Diagnostic settings configured on all resources
+
+10.4 Cost
+    ✓ Monthly cost within expected ranges
+    ✓ No unnecessary premium SKUs in non-production
+    ✓ Budget alerts functioning
+
+================================================================================
+11. EXAMPLE APPLICATIONS SUPPORTED
+================================================================================
+
+This landing zone is designed to support multiple AI-powered applications
+simultaneously. The following are example applications that can be deployed:
+
+11.1 Document Translation & Text Extraction App
+    Description: Web application for document processing and translation
+    Components:
+    - Container App (frontend): Upload interface, results display
+      * Easy Auth enabled with Entra ID
+      * Users must authenticate to access the application
+    - Container App (backend): API for document processing orchestration
+      * Validates JWT tokens from frontend or APIM
+    - Azure AI Document Intelligence: Text extraction from PDFs, images
+    - Azure Translator: Multi-language document translation
+    - Storage Containers: raw-docs, extracted-text, translated-docs
+      * User-specific folders for data isolation
+    - APIM APIs: /api/doctrans/upload, /api/doctrans/translate
+      * JWT validation policy enforces authentication
+    - Entra ID App Registration: doctrans-app
+      * Client ID stored in Key Vault
+      * Redirect URI: https://<container-app-domain>/
+    
+    Flow:
+    1. User authenticates via Entra ID (Easy Auth)
+    2. User uploads document via web UI (authenticated session)
+    3. Frontend passes access token to backend via APIM
+    4. Backend validates token and processes request
+    5. File saved to storage with user context (malware scanned)
+    6. Backend calls Document Intelligence for text extraction
+    7. Backend calls Translator for translation
+    8. Results stored in user-specific folder and returned
+    9. All Azure service access via Managed Identity and private endpoints
+
+11.2 Agentic AI Examples with Microsoft Agentic Framework
+    Description: Multi-agent AI system with orchestration
+    Components:
+    - Container App (frontend): Chat interface, agent monitoring UI
+      * Easy Auth enabled with Entra ID
+      * User identity tracked for conversation history
+    - Container App (backend): Agent orchestration API
+      * Validates JWT tokens and extracts user claims
+      * User-specific conversation isolation
+    - Container Apps (agents): Multiple specialized agent containers
+      * Service-to-service auth via Managed Identity
+    - Azure AI Foundry: Model deployments, Prompt Flow
+    - Microsoft Agentic Framework: Agent coordination, tool calling
+    - Storage: Agent state, conversation history (per user)
+    - Cosmos DB (optional): Low-latency agent state and memory
+    - APIM APIs: /api/agents/*, MCP-compatible endpoints
+      * JWT validation enforced
+      * User context passed to backend
+    - Entra ID App Registration: agents-app
+      * Client ID stored in Key Vault
+      * Redirect URI: https://<container-app-domain>/
+    
+    Flow:
+    1. User authenticates via Entra ID
+    2. User interacts with chat UI (authenticated session)
+    3. Frontend passes access token with request
+    4. Request routed through APIM with JWT validation
+    5. Orchestrator validates token and extracts user identity
+    6. Orchestrator delegates tasks to specialized agents
+    7. Agents use AI Foundry models and tools (Managed Identity)
+    8. Results aggregated and returned to user
+    9. State persisted per user for multi-turn conversations
+    10. All accessed securely with proper authentication context
+
+11.3 Additional Use Cases Supported
+    - Image analysis and captioning (Computer Vision)
+    - Speech-to-text applications (Speech Services)
+    - Content moderation pipelines (Content Safety)
+    - RAG (Retrieval Augmented Generation) with vector search
+    - Custom model inference (AI Foundry)
+    - Batch processing jobs (Container Apps jobs)
+
+================================================================================
+12. FUTURE ENHANCEMENTS
+================================================================================
+
+- Azure Front Door for global distribution (instead of App Gateway)
+- Azure CDN for static content caching
+- Azure Functions for lightweight event-driven workloads
+- GitHub Actions / Azure DevOps CI/CD pipelines
+- Multi-region deployment with Traffic Manager
+- Azure Cache for Redis for session/data caching
+- Azure Service Bus for reliable messaging between apps
+- Automated testing and validation pipelines
+- Infrastructure drift detection
+- Application-specific monitoring dashboards
+- Cost allocation tracking per application
+
+================================================================================
+13. REFERENCES & DOCUMENTATION
+================================================================================
+
+- Azure Container Apps: https://learn.microsoft.com/azure/container-apps/
+- Azure AI Foundry: https://learn.microsoft.com/azure/ai-studio/
+- Azure AI Services: https://learn.microsoft.com/azure/ai-services/
+- Document Intelligence: https://learn.microsoft.com/azure/ai-services/document-intelligence/
+- Translator: https://learn.microsoft.com/azure/ai-services/translator/
+- Microsoft Agentic Framework: https://learn.microsoft.com/semantic-kernel/ (or successor)
+- Azure Private Link: https://learn.microsoft.com/azure/private-link/
+- Managed Identity: https://learn.microsoft.com/azure/active-directory/managed-identities-azure-resources/
+- Microsoft Defender for Storage: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-storage-introduction
+- Azure Bicep: https://learn.microsoft.com/azure/azure-resource-manager/bicep/
+- Azure API Management: https://learn.microsoft.com/azure/api-management/
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
