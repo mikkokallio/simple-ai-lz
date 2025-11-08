@@ -173,6 +173,11 @@ function App() {
       
       const formData = new FormData()
       formData.append('file', fileToProcess.file)
+      
+      // Add documentId if available (so backend can save results to workspace)
+      if (fileToProcess.documentId) {
+        formData.append('documentId', fileToProcess.documentId)
+      }
 
       let endpoint = ''
       switch (processingMode) {

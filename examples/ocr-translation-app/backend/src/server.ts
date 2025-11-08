@@ -530,6 +530,8 @@ app.post('/api/ocr/document-intelligence', upload.single('file'), async (req: Re
     }
 
     const fileBuffer = req.file.buffer;
+    const userId = (req.session as any).userId;
+    const documentId = req.body.documentId; // Get documentId from request
 
     // Analyze document using prebuilt-read model (best for general OCR)
     const poller = await documentAnalysisClient.beginAnalyzeDocument('prebuilt-read', fileBuffer);
@@ -552,14 +554,27 @@ app.post('/api/ocr/document-intelligence', upload.single('file'), async (req: Re
       }))
     }));
 
-    res.json({
+    const resultData = {
       status: 'success',
       service: 'Azure Document Intelligence',
       model: 'prebuilt-read',
       text: extractedText,
       pages,
       pageCount: result.pages?.length || 0
-    });
+    };
+
+    // Save result to workspace if documentId provided
+    if (documentId && userId) {
+      try {
+        await saveResultToWorkspace(userId, documentId, 'ocr', resultData);
+        console.log(`Saved OCR-DI result to workspace for document ${documentId}`);
+      } catch (saveError) {
+        console.error('Failed to save result to workspace:', saveError);
+        // Continue even if save fails - don't block the response
+      }
+    }
+
+    res.json(resultData);
   } catch (error) {
     console.error('Error in document-intelligence:', error);
     res.status(500).json({
@@ -802,6 +817,22 @@ app.post('/api/translate', upload.single('file'), async (req: Request, res: Resp
     const targetBlobClient = blobServiceClient.getContainerClient(targetContainerName).getBlockBlobClient(translatedDocumentUrl.split('/').pop()!);
     const downloadResponse = await targetBlobClient.download();
     const translatedBuffer = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    // Save to workspace if documentId provided
+    const userId = (req.session as any).userId;
+    const documentId = req.body.documentId;
+    
+    if (documentId && userId) {
+      try {
+        // Save translated PDF to workspace
+        const translatedFilename = `translated-${targetLanguage}-${req.file.originalname}`;
+        await saveResultToWorkspace(userId, documentId, 'translate', translatedBuffer, translatedFilename);
+        console.log(`Saved translation result to workspace for document ${documentId}`);
+      } catch (saveError) {
+        console.error('Failed to save translation to workspace:', saveError);
+        // Continue even if save fails
+      }
+    }
     
     // Return translated document
     res.setHeader('Content-Type', req.file.mimetype);
