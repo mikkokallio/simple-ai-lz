@@ -8,6 +8,7 @@ import * as appInsights from 'applicationinsights';
 import { DefaultAzureCredential } from '@azure/identity';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { OpenAI } from 'openai';
+import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
 
 dotenv.config();
 
@@ -16,6 +17,7 @@ const credential = new DefaultAzureCredential();
 const storageAccountName = process.env.STORAGE_ACCOUNT_NAME || '';
 let blobServiceClient: BlobServiceClient | null = null;
 let openaiClient: OpenAI | null = null;
+let documentAnalysisClient: DocumentAnalysisClient | null = null;
 
 if (storageAccountName) {
   blobServiceClient = new BlobServiceClient(
@@ -31,6 +33,25 @@ if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY) {
     defaultQuery: { 'api-version': '2024-02-15-preview' },
     defaultHeaders: { 'api-key': process.env.AZURE_OPENAI_API_KEY }
   });
+}
+
+if (process.env.DOCUMENT_INTELLIGENCE_ENDPOINT) {
+  // Try to use managed identity first, fall back to key if available
+  try {
+    documentAnalysisClient = new DocumentAnalysisClient(
+      process.env.DOCUMENT_INTELLIGENCE_ENDPOINT,
+      credential
+    );
+  } catch (err) {
+    console.log('Failed to create Document Intelligence client with managed identity:', err);
+    // Fall back to key-based auth if DOCUMENT_INTELLIGENCE_KEY is set
+    if (process.env.DOCUMENT_INTELLIGENCE_KEY) {
+      documentAnalysisClient = new DocumentAnalysisClient(
+        process.env.DOCUMENT_INTELLIGENCE_ENDPOINT,
+        new AzureKeyCredential(process.env.DOCUMENT_INTELLIGENCE_KEY)
+      );
+    }
+  }
 }
 
 // Configure multer for memory storage
@@ -93,20 +114,62 @@ app.get('/', (_req: Request, res: Response) => {
 });
 
 // OCR endpoint - Document Intelligence
-app.post('/api/ocr/document-intelligence', async (req: Request, res: Response) => {
+app.post('/api/ocr/document-intelligence', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    // MVP: Return stub response
+    if (!documentAnalysisClient) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Document Intelligence not configured'
+      });
+    }
+
+    // Document Intelligence: Always use direct file buffer
+    // (Blob URLs don't work because storage has private endpoints only accessible from VNet,
+    // but Document Intelligence service is outside the VNet)
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No file provided'
+      });
+    }
+
+    const fileBuffer = req.file.buffer;
+
+    // Analyze document using prebuilt-read model (best for general OCR)
+    const poller = await documentAnalysisClient.beginAnalyzeDocument('prebuilt-read', fileBuffer);
+    
+    const result = await poller.pollUntilDone();
+
+    // Extract text content
+    const extractedText = result.content || '';
+    
+    // Extract pages with layout information
+    const pages = result.pages?.map(page => ({
+      pageNumber: page.pageNumber,
+      width: page.width,
+      height: page.height,
+      angle: page.angle,
+      unit: page.unit,
+      lines: page.lines?.map(line => ({
+        content: line.content,
+        polygon: line.polygon
+      }))
+    }));
+
     res.json({
       status: 'success',
-      message: 'Document Intelligence OCR (MVP - stub response)',
-      endpoint: process.env.DOCUMENT_INTELLIGENCE_ENDPOINT || 'Not configured',
-      note: 'Full implementation will use Azure Document Intelligence SDK with managed identity'
+      service: 'Azure Document Intelligence',
+      model: 'prebuilt-read',
+      text: extractedText,
+      pages,
+      pageCount: result.pages?.length || 0
     });
   } catch (error) {
     console.error('Error in document-intelligence:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Internal server error'
+      message: 'Internal server error',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
