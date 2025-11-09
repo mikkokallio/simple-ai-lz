@@ -140,13 +140,8 @@ declare module 'express-session' {
   }
 }
 
-// Ensure userId exists in session
-app.use((req, _res, next) => {
-  if (!req.session.userId) {
-    req.session.userId = uuidv4();
-  }
-  next();
-});
+// Use static userId until authentication is implemented
+const STATIC_USER_ID = 'demo';
 
 // Workspace utility functions
 interface DocumentMetadata {
@@ -443,7 +438,7 @@ app.post('/api/workspace/upload', upload.single('file'), async (req: Request, re
     }
     
     const documentId = uuidv4();
-    const userId = req.session.userId || 'demo';
+    const userId = STATIC_USER_ID;
     
     await saveToWorkspace(
       userId,
@@ -607,7 +602,7 @@ app.delete('/api/workspace/:userId/:documentId', async (req: Request, res: Respo
 // Get document metadata
 app.get('/api/workspace/:documentId', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId || 'demo';
+    const userId = STATIC_USER_ID;
     const { documentId } = req.params;
     
     const metadata = await getDocumentMetadata(userId, documentId);
@@ -632,7 +627,7 @@ app.get('/api/workspace/:documentId', async (req: Request, res: Response) => {
 // Get document result
 app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId || 'demo';
+    const userId = STATIC_USER_ID;
     const { documentId, mode } = req.params;
     
     if (!blobServiceClient) {
@@ -682,7 +677,7 @@ app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Res
 // List all results for a document
 app.get('/api/workspace/:documentId/results', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId || 'demo';
+    const userId = STATIC_USER_ID;
     const { documentId } = req.params;
     
     console.log('[LIST_RESULTS] Listing results for userId:', userId, 'documentId:', documentId);
@@ -738,7 +733,7 @@ app.get('/api/workspace/:documentId/results', async (req: Request, res: Response
 // Get specific result for a document
 app.get('/api/workspace/:documentId/results/:mode', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId || 'demo';
+    const userId = STATIC_USER_ID;
     const { documentId, mode } = req.params;
     
     if (!blobServiceClient) {
@@ -799,7 +794,7 @@ app.get('/api/workspace/:documentId/results/:mode', async (req: Request, res: Re
 // Process document from workspace
 app.post('/api/workspace/:documentId/process', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId || 'demo';
+    const userId = STATIC_USER_ID;
     const { documentId } = req.params;
     const { mode, targetLanguage, systemPrompt, outputFormat } = req.body;
     
