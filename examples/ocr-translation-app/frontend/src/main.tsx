@@ -121,6 +121,32 @@ function App() {
     setFiles(prev => [...prev, ...fileObjects])
   }
 
+  const processFromWorkspace = async (documentId: string, filename: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/workspace/${documentId}/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          mode: processingMode.includes('ocr') ? 'ocr' : processingMode.includes('translate') ? 'translate' : 'analyze',
+          targetLanguage: processingMode.includes('translate') ? targetLanguage : undefined
+        })
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Processing failed: ${response.statusText}`)
+      }
+      
+      const result = await response.json()
+      alert(`✅ Processing started for ${filename}!\n\nMode: ${result.mode}\nDocument ID: ${result.documentId}`)
+      
+      // Reload workspace documents to show updated processed modes
+      await loadWorkspaceDocuments()
+    } catch (error) {
+      alert(`❌ Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
   const processFile = async (index: number) => {
     const fileToProcess = files[index]
     if (!fileToProcess) return
@@ -791,6 +817,30 @@ function App() {
                           {doc.malwareScanStatus === 'pending' && '⏳'}
                         </div>
                       </div>
+                      
+                      {/* Process Button */}
+                      {doc.malwareScanStatus === 'clean' && (
+                        <button
+                          onClick={() => processFromWorkspace(doc.documentId, doc.originalFilename)}
+                          style={{
+                            width: '100%',
+                            marginTop: '0.75rem',
+                            padding: '0.5rem',
+                            background: '#667eea',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            fontSize: '0.85rem',
+                            fontWeight: '600',
+                            transition: 'background 0.2s'
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#5568d3'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = '#667eea'}
+                        >
+                          🔄 Process Document
+                        </button>
+                      )}
                       
                       {doc.processedModes.length > 0 && (
                         <div style={{ 
