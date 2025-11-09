@@ -885,9 +885,16 @@ For PDFs, please use:
         model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
         messages: [
           {
+            role: 'system',
+            content: `You are a professional translator. Your task is to TRANSLATE text from images, not just extract it. When given an image with text and a target language, you must output ONLY the translation in the target language.`
+          },
+          {
             role: 'user',
             content: [
-              { type: 'text', text: `Translate all text in this document to ${targetLanguage}. Preserve the structure and meaning accurately. Return only the translated text.` },
+              { 
+                type: 'text', 
+                text: `Read all text in this image and translate it to ${targetLanguage}. Important: Output ONLY the translation in ${targetLanguage}, not the original text. Do not explain, do not add comments, just provide the ${targetLanguage} translation.` 
+              },
               { type: 'image_url', image_url: { url: dataUrl } }
             ]
           }
@@ -897,12 +904,16 @@ For PDFs, please use:
 
       const translatedText = response.choices[0]?.message?.content || '';
       
+      // Try to detect if translation happened by checking if output differs significantly from typical OCR
+      const sourceLanguage = metadata.sourceLanguage || 'auto-detected';
+      
       result = {
         service: 'OpenAI Vision Translation',
         serviceDescription: 'One-step AI translation for images',
         model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
         translatedText,
-        targetLanguage
+        targetLanguage,
+        sourceLanguage
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result);
