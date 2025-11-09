@@ -221,7 +221,9 @@ function App() {
       }
       
       console.log('[LOAD_RESULTS] Total results loaded:', allResults.length)
+      console.log('[LOAD_RESULTS] Setting processedResults state with:', allResults)
       setProcessedResults(allResults)
+      console.log('[LOAD_RESULTS] State update called')
     } catch (error) {
       console.error('Failed to load processed results:', error)
     }
@@ -870,7 +872,10 @@ function App() {
         )}
 
         {/* Step 3: Results */}
-        {activeTab === 'results' && (
+        {activeTab === 'results' && (() => {
+          console.log('[RENDER] Results tab rendering with processedResults:', processedResults)
+          console.log('[RENDER] processedResults.length:', processedResults.length)
+          return (
           <div style={{ 
             background: 'white', 
             padding: '24px',
@@ -991,7 +996,8 @@ function App() {
               emptyMessage="No results yet. Process documents to see results here."
             />
           </div>
-        )}
+          )
+        })()}
       </div>
     </div>
 
