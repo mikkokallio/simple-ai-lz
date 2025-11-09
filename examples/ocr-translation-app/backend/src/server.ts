@@ -261,7 +261,8 @@ async function saveResultToWorkspace(
   documentId: string,
   mode: 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai' | 'document-translate',
   result: any,
-  filename?: string
+  filename?: string,
+  outputFormat: string = 'json'
 ): Promise<void> {
   if (!blobServiceClient) throw new Error('Storage not configured');
   
@@ -291,21 +292,47 @@ async function saveResultToWorkspace(
     console.error('Failed to update metadata:', err);
   }
   
-  // Save result
-  const resultFilename = filename || 'result.json';
+  // Determine file extension and content based on format
+  let fileExtension = 'json';
+  let content: Buffer;
+  let contentType = 'application/json';
+  
+  if (outputFormat === 'txt' || outputFormat === 'text') {
+    fileExtension = 'txt';
+    contentType = 'text/plain';
+    // Extract text from result object
+    if (typeof result === 'string') {
+      content = Buffer.from(result);
+    } else if (result.text) {
+      content = Buffer.from(result.text);
+    } else if (result.translatedText) {
+      content = Buffer.from(result.translatedText);
+    } else if (result.ocrText) {
+      content = Buffer.from(result.ocrText);
+    } else {
+      content = Buffer.from(JSON.stringify(result, null, 2));
+    }
+  } else {
+    // JSON format (default)
+    fileExtension = 'json';
+    contentType = 'application/json';
+    if (typeof result === 'string' || Buffer.isBuffer(result)) {
+      const buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+      content = buffer;
+    } else {
+      content = Buffer.from(JSON.stringify(result, null, 2));
+    }
+  }
+  
+  // Save result with appropriate extension
+  const resultFilename = filename || `result.${fileExtension}`;
   const resultBlobClient = containerClient.getBlockBlobClient(
     `${userId}/${documentId}/results/${mode}/${resultFilename}`
   );
   
-  if (typeof result === 'string' || Buffer.isBuffer(result)) {
-    const buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
-    await resultBlobClient.upload(buffer, buffer.length);
-  } else {
-    const jsonString = JSON.stringify(result, null, 2);
-    await resultBlobClient.upload(jsonString, jsonString.length, {
-      blobHTTPHeaders: { blobContentType: 'application/json' }
-    });
-  }
+  await resultBlobClient.upload(content, content.length, {
+    blobHTTPHeaders: { blobContentType: contentType }
+  });
 }
 
 async function getDocumentMetadata(userId: string, documentId: string): Promise<DocumentMetadata | null> {
@@ -648,14 +675,60 @@ app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Res
   }
 });
 
+// List all results for a document
+app.get('/api/workspace/:documentId/results', async (req: Request, res: Response) => {
+  try {
+    const userId = req.session.userId || 'demo';
+    const { documentId } = req.params;
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const prefix = `${userId}/${documentId}/results/`;
+    
+    const results: any[] = [];
+    
+    for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+      // Parse blob path: ${userId}/${documentId}/results/${mode}/${filename}
+      const pathParts = blob.name.split('/');
+      if (pathParts.length >= 5) {
+        const mode = pathParts[3];
+        const filename = pathParts[4];
+        
+        results.push({
+          mode,
+          filename,
+          url: `/api/workspace/${documentId}/results/${mode}`,
+          size: blob.properties.contentLength,
+          lastModified: blob.properties.lastModified,
+          contentType: blob.properties.contentType
+        });
+      }
+    }
+    
+    res.json({
+      status: 'success',
+      results
+    });
+  } catch (error) {
+    console.error('List results error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to list results'
+    });
+  }
+});
+
 // Process document from workspace
 app.post('/api/workspace/:documentId/process', async (req: Request, res: Response) => {
   try {
     const userId = req.session.userId || 'demo';
     const { documentId } = req.params;
-    const { mode, targetLanguage, systemPrompt } = req.body;
+    const { mode, targetLanguage, systemPrompt, outputFormat } = req.body;
     
-    console.log(`[PROCESS] userId: ${userId}, documentId: ${documentId}, mode: ${mode}`);
+    console.log(`[PROCESS] userId: ${userId}, documentId: ${documentId}, mode: ${mode}, outputFormat: ${outputFormat}`);
     
     if (!['ocr-di', 'ocr-cu', 'ocr-openai', 'translate', 'translate-openai', 'document-translate'].includes(mode)) {
       return res.status(400).json({ status: 'error', message: 'Invalid processing mode' });
@@ -713,7 +786,7 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
         pageCount: analysisResult.pages?.length || 0
       };
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-di', result);
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-di', result, undefined, outputFormat || 'json');
       
     } else if (mode === 'ocr-cu') {
       // Tool 2: Azure AI Foundry Content Understanding
@@ -758,7 +831,7 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
         throw new Error(`AI Foundry Content Understanding failed: ${error.response?.data?.error?.message || error.message}`);
       }
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result);
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result, undefined, outputFormat || 'json');
       
     } else if (mode === 'ocr-openai') {
       // Tool 3: OpenAI Vision OCR
@@ -811,7 +884,7 @@ For PDFs, please use:
         text: extractedText
       };
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-openai', result);
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-openai', result, undefined, outputFormat || 'json');
       
     } else if (mode === 'translate') {
       // Tool 4: Azure Document Intelligence + Azure Text Translator
@@ -851,7 +924,7 @@ For PDFs, please use:
         sourceLanguage: translationData.detectedLanguage?.language || sourceLanguage
       };
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'translate', result);
+      await saveResultToWorkspace(metadata.userId, documentId, 'translate', result, undefined, outputFormat || 'json');
       
     } else if (mode === 'translate-openai') {
       // Tool 5: OpenAI Vision Translation (one-step, images only)
@@ -916,7 +989,7 @@ For PDFs, please use:
         sourceLanguage
       };
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result);
+      await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result, undefined, outputFormat || 'json');
       
     } else if (mode === 'document-translate') {
       // Tool 6: Azure Document Translation - format-preserving batch translation using SDK
