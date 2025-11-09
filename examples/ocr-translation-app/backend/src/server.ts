@@ -677,13 +677,21 @@ app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Res
 // List all results for a document
 app.get('/api/workspace/:documentId/results', async (req: Request, res: Response) => {
   try {
-    const userId = STATIC_USER_ID;
+    let userId = STATIC_USER_ID;
     const { documentId } = req.params;
     
     console.log('[LIST_RESULTS] Listing results for userId:', userId, 'documentId:', documentId);
     
     if (!blobServiceClient) {
       return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    // FIX: Find the actual userId for this document
+    const allDocs = await listAllDocuments();
+    const doc = allDocs.find(d => d.documentId === documentId);
+    if (doc) {
+      userId = doc.userId;
+      console.log('[LIST_RESULTS] Found document with actual userId:', userId);
     }
     
     const containerClient = blobServiceClient.getContainerClient('workspace');
@@ -733,11 +741,18 @@ app.get('/api/workspace/:documentId/results', async (req: Request, res: Response
 // Get specific result for a document
 app.get('/api/workspace/:documentId/results/:mode', async (req: Request, res: Response) => {
   try {
-    const userId = STATIC_USER_ID;
+    let userId = STATIC_USER_ID;
     const { documentId, mode } = req.params;
     
     if (!blobServiceClient) {
       return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    // FIX: Find the actual userId for this document
+    const allDocs = await listAllDocuments();
+    const doc = allDocs.find(d => d.documentId === documentId);
+    if (doc) {
+      userId = doc.userId;
     }
     
     const containerClient = blobServiceClient.getContainerClient('workspace');
