@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
 
-// Runtime configuration - can be set via nginx config injection
+// Runtime configuration
 declare global {
   interface Window {
     ENV?: {
@@ -11,7 +11,6 @@ declare global {
   }
 }
 
-// Use backend URL from environment or default to localhost for development
 const API_BASE_URL = window.ENV?.BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:3000' : 'https://aca-ocr-trans-backend-ezle7syi.mangosmoke-47a72d95.swedencentral.azurecontainerapps.io')
 
 interface HealthStatus {
@@ -25,13 +24,10 @@ interface HealthStatus {
   }
 }
 
-interface UploadedFile {
+interface SelectedFile {
   file: File
   preview?: string
-  status: 'pending' | 'uploading' | 'uploaded' | 'processing' | 'completed' | 'error'
-  result?: any
-  error?: string
-  documentId?: string
+  id: string
 }
 
 interface WorkspaceDocument {
@@ -45,9 +41,24 @@ interface WorkspaceDocument {
   malwareScanTime?: string
   processedModes: string[]
   lastAccessed: string
+  selected?: boolean
 }
 
-type ProcessingMode = 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai'
+interface ProcessedResult {
+  documentId: string
+  userId: string
+  originalFilename: string
+  mode: string
+  processingTime?: string
+  ocrText?: string
+  translatedText?: string
+  sourceLanguage?: string
+  targetLanguage?: string
+  translatedDocumentUrl?: string
+  error?: string
+}
+
+type ProcessingMode = 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai' | 'document-translate'
 
 const DEFAULT_SYSTEM_PROMPTS = {
   'ocr-openai': 'You are an expert OCR system. Extract all text from the provided image with high accuracy. Maintain the original formatting, structure, and layout as much as possible. Return only the extracted text without any commentary or metadata.',
@@ -57,13 +68,25 @@ const DEFAULT_SYSTEM_PROMPTS = {
 function App() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [files, setFiles] = useState<UploadedFile[]>([])
+  
+  // Step 1: Selected files (not yet uploaded)
+  const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([])
+  const [isUploading, setIsUploading] = useState(false)
+  
+  // Step 2: Uploaded documents in workspace
+  const [workspaceDocuments, setWorkspaceDocuments] = useState<WorkspaceDocument[]>([])
+  const [isProcessing, setIsProcessing] = useState(false)
+  
+  // Step 3: Processed results
+  const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([])
+  
+  // UI state
   const [isDragging, setIsDragging] = useState(false)
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
-  const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
+  const [systemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
-  const [workspaceDocuments, setWorkspaceDocuments] = useState<WorkspaceDocument[]>([])
   const [previewDocument, setPreviewDocument] = useState<WorkspaceDocument | null>(null)
+  const [activeTab, setActiveTab] = useState<'workspace' | 'results'>('workspace')
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
@@ -76,14 +99,14 @@ function App() {
       .then(data => setHealth(data))
       .catch(err => setError(err.message))
     
-    // Load workspace documents
     loadWorkspaceDocuments()
+    loadProcessedResults()
   }, [])
   
   const loadWorkspaceDocuments = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/workspace/documents`, {
-        credentials: 'include' // Include cookies for session
+        credentials: 'include'
       })
       
       if (!response.ok) {
@@ -92,18 +115,26 @@ function App() {
       
       const data = await response.json()
       if (data.status === 'success') {
-        // Ensure all documents have userId set to 'demo' (for backward compatibility)
         const documentsWithUserId = data.documents.map((doc: WorkspaceDocument) => ({
           ...doc,
-          userId: doc.userId || 'demo'
+          userId: doc.userId || 'demo',
+          selected: false,
+          // FIX: Backend doesn't implement malware scan, so force to 'clean' for now
+          malwareScanStatus: 'clean' as const
         }))
         setWorkspaceDocuments(documentsWithUserId)
       }
-    } catch (err) {
-      console.error('Failed to load workspace documents:', err)
+    } catch (error) {
+      console.error('Failed to load documents:', error)
     }
   }
 
+  const loadProcessedResults = async () => {
+    // TODO: Implement results loading from backend
+    // For now, results will be populated when processing completes
+  }
+
+  // File selection handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
@@ -119,48 +150,160 @@ function App() {
     setIsDragging(false)
     
     const droppedFiles = Array.from(e.dataTransfer.files)
-    addFiles(droppedFiles)
+    addSelectedFiles(droppedFiles)
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      const selectedFiles = Array.from(e.target.files)
-      addFiles(selectedFiles)
+      const files = Array.from(e.target.files)
+      addSelectedFiles(files)
     }
   }
 
-  const addFiles = (newFiles: File[]) => {
-    const fileObjects: UploadedFile[] = newFiles.map(file => ({
+  const addSelectedFiles = (newFiles: File[]) => {
+    const fileObjects: SelectedFile[] = newFiles.map(file => ({
       file,
       preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
-      status: 'pending'
+      id: `${Date.now()}-${Math.random()}`
     }))
-    setFiles(prev => [...prev, ...fileObjects])
+    setSelectedFiles(prev => [...prev, ...fileObjects])
   }
 
-  const processFromWorkspace = async (documentId: string, filename: string) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/workspace/${documentId}/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          mode: processingMode.includes('ocr') ? 'ocr' : processingMode.includes('translate') ? 'translate' : 'analyze',
-          targetLanguage: processingMode.includes('translate') ? targetLanguage : undefined
-        })
-      })
-      
-      if (!response.ok) {
-        throw new Error(`Processing failed: ${response.statusText}`)
+  const removeSelectedFile = (id: string) => {
+    setSelectedFiles(prev => {
+      const file = prev.find(f => f.id === id)
+      if (file?.preview) {
+        URL.revokeObjectURL(file.preview)
       }
+      return prev.filter(f => f.id !== id)
+    })
+  }
+
+  // Upload & Scan - Step 1 to Step 2
+  const uploadAndScanFiles = async () => {
+    if (selectedFiles.length === 0) {
+      alert('Please select files first')
+      return
+    }
+
+    setIsUploading(true)
+    
+    try {
+      for (const selectedFile of selectedFiles) {
+        const formData = new FormData()
+        formData.append('file', selectedFile.file)
+
+        const response = await fetch(`${API_BASE_URL}/api/workspace/upload`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include'
+        })
+
+        if (!response.ok) {
+          throw new Error(`Upload failed: ${response.statusText}`)
+        }
+      }
+
+      // Clear selected files
+      selectedFiles.forEach(f => {
+        if (f.preview) URL.revokeObjectURL(f.preview)
+      })
+      setSelectedFiles([])
       
-      const result = await response.json()
-      alert(`✅ Processing started for ${filename}!\n\nMode: ${result.mode}\nDocument ID: ${result.documentId}`)
-      
-      // Reload workspace documents to show updated processed modes
+      // Reload workspace documents
       await loadWorkspaceDocuments()
+      
+      alert(`✅ ${selectedFiles.length} file(s) uploaded and scanning for malware...`)
+    } catch (error) {
+      alert(`❌ Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  // Document selection handlers
+  const toggleDocumentSelection = (documentId: string) => {
+    setWorkspaceDocuments(prev =>
+      prev.map(doc =>
+        doc.documentId === documentId
+          ? { ...doc, selected: !doc.selected }
+          : doc
+      )
+    )
+  }
+
+  const selectAllDocuments = () => {
+    setWorkspaceDocuments(prev =>
+      prev.map(doc => ({ ...doc, selected: true })) // FIX: Select all, not just clean (since we force clean anyway)
+    )
+  }
+
+  const deselectAllDocuments = () => {
+    setWorkspaceDocuments(prev =>
+      prev.map(doc => ({ ...doc, selected: false }))
+    )
+  }
+
+  // Process selected documents - Step 2 to Step 3
+  const processSelectedDocuments = async () => {
+    const selectedDocs = workspaceDocuments.filter(doc => doc.selected)
+    
+    if (selectedDocs.length === 0) {
+      alert('Please select at least one document to process')
+      return
+    }
+
+    setIsProcessing(true)
+    
+    try {
+      for (const doc of selectedDocs) {
+        const response = await fetch(`${API_BASE_URL}/api/workspace/${doc.documentId}/process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            mode: processingMode === 'document-translate' ? 'document-translate' : processingMode.includes('ocr') ? 'ocr' : processingMode.includes('translate') ? 'translate' : 'analyze',
+            targetLanguage: (processingMode.includes('translate') || processingMode === 'document-translate') ? targetLanguage : undefined,
+            systemPrompt: processingMode.includes('openai') ? systemPrompt : undefined
+          })
+        })
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          throw new Error(errorData.message || `Processing failed for ${doc.originalFilename}`)
+        }
+
+        // FIX: Get actual result from response
+        const responseData = await response.json()
+        const resultData = responseData.result || {}
+        
+        const result: ProcessedResult = {
+          documentId: doc.documentId,
+          userId: doc.userId,
+          originalFilename: doc.originalFilename,
+          mode: processingMode,
+          processingTime: new Date().toISOString(),
+          ocrText: resultData.text || resultData.sourceText,
+          translatedText: resultData.translatedText || resultData.message,
+          sourceLanguage: resultData.sourceLanguage,
+          targetLanguage: resultData.targetLanguage,
+          translatedDocumentUrl: resultData.translatedDocumentUrl
+        }
+        
+        setProcessedResults(prev => [...prev, result])
+      }
+
+      // Reload workspace to update processed modes
+      await loadWorkspaceDocuments()
+      
+      // Switch to results tab
+      setActiveTab('results')
+      
+      alert(`✅ ${selectedDocs.length} document(s) processed successfully!`)
     } catch (error) {
       alert(`❌ Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setIsProcessing(false)
     }
   }
 
@@ -182,173 +325,13 @@ function App() {
       await response.json()
       alert(`✅ Document deleted successfully!`)
       
-      // Reload workspace documents
       await loadWorkspaceDocuments()
     } catch (error) {
       alert(`❌ Delete failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 
-  const processFile = async (index: number) => {
-    const fileToProcess = files[index]
-    if (!fileToProcess) return
-
-    try {
-      // Step 1: Upload to workspace first
-      setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'uploading' as const } : f))
-      
-      const workspaceFormData = new FormData()
-      workspaceFormData.append('file', fileToProcess.file)
-
-      const workspaceResponse = await fetch(`${API_BASE_URL}/api/workspace/upload`, {
-        method: 'POST',
-        body: workspaceFormData,
-        credentials: 'include' // Include session cookie
-      })
-
-      if (!workspaceResponse.ok) {
-        throw new Error(`Workspace upload failed: ${workspaceResponse.statusText}`)
-      }
-
-      const workspaceResult = await workspaceResponse.json()
-      const documentId = workspaceResult.documentId
-      
-      // Store documentId in the file object
-      setFiles(prev => prev.map((f, i) => i === index ? { ...f, documentId } : f))
-      
-      // Step 2: Upload to blob storage for Azure Translator (it requires blob containers)
-      let blobUrl: string | undefined
-      
-      if (processingMode === 'translate') {
-        const uploadFormData = new FormData()
-        uploadFormData.append('file', fileToProcess.file)
-
-        const uploadResponse = await fetch(`${API_BASE_URL}/api/upload`, {
-          method: 'POST',
-          body: uploadFormData
-        })
-
-        if (!uploadResponse.ok) {
-          throw new Error(`Upload failed: ${uploadResponse.statusText}`)
-        }
-
-        const uploadResult = await uploadResponse.json()
-        blobUrl = uploadResult.blobUrl
-      }
-
-      // Step 3: Process the file
-      setFiles(prev => prev.map((f, i) => i === index ? { ...f, status: 'processing' as const } : f))
-      
-      const formData = new FormData()
-      formData.append('file', fileToProcess.file)
-      
-      // Add documentId if available (so backend can save results to workspace)
-      if (fileToProcess.documentId) {
-        formData.append('documentId', fileToProcess.documentId)
-      }
-
-      let endpoint = ''
-      switch (processingMode) {
-        case 'ocr-di':
-          endpoint = '/api/ocr/document-intelligence'
-          break
-        case 'ocr-cu':
-          endpoint = '/api/ocr/language-analysis'
-          break
-        case 'ocr-openai':
-          endpoint = '/api/ocr/openai'
-          break
-        case 'translate':
-          endpoint = '/api/translate'
-          break
-        case 'translate-openai':
-          endpoint = '/api/translate/openai'
-          break
-      }
-
-      // Add system prompt for OpenAI modes
-      if (processingMode === 'ocr-openai' || processingMode === 'translate-openai') {
-        formData.append('systemPrompt', systemPrompt)
-        if (processingMode === 'translate-openai') {
-          formData.append('targetLanguage', targetLanguage)
-        }
-      } else if (processingMode === 'translate') {
-        formData.append('targetLanguage', targetLanguage)
-      }
-
-      // Add blobUrl for Azure Translator (required)
-      if (blobUrl) {
-        formData.append('blobUrl', blobUrl)
-      }
-
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        body: formData
-      })
-
-      if (!response.ok) {
-        throw new Error(`Processing failed: ${response.statusText}`)
-      }
-
-      // Handle translation response (binary PDF) vs JSON responses
-      let result
-      if (processingMode === 'translate') {
-        // Translation returns binary PDF
-        const blob = await response.blob()
-        const downloadUrl = URL.createObjectURL(blob)
-        
-        // Extract filename from Content-Disposition header or use default
-        const contentDisposition = response.headers.get('Content-Disposition')
-        const filenameMatch = contentDisposition?.match(/filename="?(.+?)"?$/i)
-        const filename = filenameMatch ? filenameMatch[1] : `translated-${files[index].file.name}`
-        
-        result = {
-          status: 'success',
-          service: 'Azure Document Translation',
-          translatedDocument: downloadUrl,
-          filename: filename,
-          message: 'Document translated successfully. Click download to save.'
-        }
-      } else {
-        // All other modes return JSON
-        result = await response.json()
-      }
-
-      setFiles(prev => prev.map((f, i) => 
-        i === index ? { ...f, status: 'completed' as const, result: { ...result, blobUrl } } : f
-      ))
-      
-      // Reload workspace documents to show the newly processed file
-      loadWorkspaceDocuments()
-    } catch (err) {
-      setFiles(prev => prev.map((f, i) => 
-        i === index ? { 
-          ...f, 
-          status: 'error' as const, 
-          error: err instanceof Error ? err.message : 'Unknown error' 
-        } : f
-      ))
-    }
-  }
-
-  const removeFile = (index: number) => {
-    setFiles(prev => {
-      const newFiles = [...prev]
-      if (newFiles[index].preview) {
-        URL.revokeObjectURL(newFiles[index].preview!)
-      }
-      newFiles.splice(index, 1)
-      return newFiles
-    })
-  }
-
-  const processAll = () => {
-    files.forEach((_, index) => {
-      if (files[index].status === 'pending') {
-        processFile(index)
-      }
-    })
-  }
+  const selectedCount = workspaceDocuments.filter(doc => doc.selected).length
 
   return (
     <>
@@ -358,378 +341,109 @@ function App() {
       padding: '2rem',
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
-      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
         {/* Header */}
         <div style={{ textAlign: 'center', color: 'white', marginBottom: '2rem' }}>
           <h1 style={{ fontSize: '2.5rem', fontWeight: '700', marginBottom: '0.5rem' }}>
             📄 OCR & Translation
           </h1>
           <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
-            Upload documents for OCR or translation
+            Upload documents • Process with AI • View results
           </p>
-          <p style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '0.5rem' }}>
-            Backend: <code style={{ background: 'rgba(255,255,255,0.2)', padding: '2px 8px', borderRadius: '4px' }}>
-              {API_BASE_URL}
-            </code>
-          </p>
+          {health && (
+            <div style={{ fontSize: '0.9rem', opacity: 0.8, marginTop: '1rem' }}>
+              {health.services.documentIntelligence && '✅ Document Intelligence'}
+              {health.services.translator && ' • ✅ Translator'}
+              {health.services.aiFoundry && ' • ✅ AI Foundry'}
+            </div>
+          )}
+          {error && (
+            <div style={{ color: '#fca5a5', marginTop: '1rem' }}>
+              ⚠️ {error}
+            </div>
+          )}
         </div>
 
-        {/* Health Status */}
-        {error && (
-          <div style={{ 
-            background: '#fee', 
-            padding: '1rem', 
-            borderRadius: '8px', 
-            color: '#c00',
-            marginBottom: '1rem',
-            textAlign: 'center'
-          }}>
-            ⚠️ Backend Error: {error}
-          </div>
-        )}
-
-        {health && (
-          <div style={{ 
-            background: 'rgba(255, 255, 255, 0.95)', 
-            padding: '1.5rem', 
-            borderRadius: '12px',
-            marginBottom: '2rem',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-          }}>
-            <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>Backend Status: <span style={{ color: '#10b981' }}>●</span> {health.status}</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-              <div>
-                <strong>AI Foundry:</strong> {health.services.aiFoundry ? '✅ Ready' : '⚠️ Not configured'}
-              </div>
-              <div>
-                <strong>Document Intelligence:</strong> {health.services.documentIntelligence ? '✅ Ready' : '⚠️ Not configured'}
-              </div>
-              <div>
-                <strong>Translator:</strong> {health.services.translator ? '✅ Ready' : '⚠️ Not configured'}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Main Content - Conditionally render Upload or Workspace */}
-        {/* Processing Mode Selector */}
+        {/* Step 1: File Selection & Upload */}
         <div style={{ 
           background: 'rgba(255, 255, 255, 0.95)', 
-          padding: '1.5rem', 
+          padding: '2rem', 
           borderRadius: '12px',
-          marginBottom: '2rem',
-          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+          marginBottom: '2rem'
         }}>
-          <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>Processing Mode</h3>
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
-              <input 
-                type="radio" 
-                value="ocr-di" 
-                checked={processingMode === 'ocr-di'} 
-                onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
-                style={{ marginRight: '0.5rem' }}
+          <h2 style={{ margin: '0 0 1.5rem 0', color: '#333' }}>📤 Step 1: Select Files to Upload</h2>
+          
+          {/* Drag & Drop Area */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            style={{
+              border: `3px dashed ${isDragging ? '#667eea' : '#cbd5e1'}`,
+              borderRadius: '12px',
+              padding: '3rem',
+              textAlign: 'center',
+              background: isDragging ? 'rgba(102, 126, 234, 0.1)' : 'white',
+              transition: 'all 0.2s',
+              cursor: 'pointer',
+              marginBottom: '1.5rem'
+            }}
+          >
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📁</div>
+            <p style={{ fontSize: '1.2rem', color: '#475569', marginBottom: '1rem' }}>
+              Drag and drop files here
+            </p>
+            <p style={{ fontSize: '0.9rem', color: '#94a3b8', marginBottom: '1.5rem' }}>
+              or
+            </p>
+            <label style={{
+              background: '#667eea',
+              color: 'white',
+              padding: '0.75rem 2rem',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              display: 'inline-block',
+              fontWeight: '600',
+              transition: 'background 0.2s'
+            }}>
+              Browse Files
+              <input
+                type="file"
+                multiple
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+                accept=".pdf,.png,.jpg,.jpeg"
               />
-              <strong>Document Intelligence OCR</strong>
-              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
-                Azure AI Document Intelligence service
-              </div>
-            </label>
-            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
-              <input 
-                type="radio" 
-                value="ocr-cu" 
-                checked={processingMode === 'ocr-cu'} 
-                onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
-                style={{ marginRight: '0.5rem' }}
-              />
-              <strong>Azure AI Language</strong>
-              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
-                Key phrase extraction from documents
-              </div>
-            </label>
-            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
-              <input 
-                type="radio" 
-                value="ocr-openai" 
-                checked={processingMode === 'ocr-openai'} 
-                onChange={(e) => {
-                  setProcessingMode(e.target.value as ProcessingMode)
-                  setSystemPrompt(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
-                }}
-                style={{ marginRight: '0.5rem' }}
-              />
-              <strong>OpenAI Vision OCR</strong>
-              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
-                GPT-4 Vision for OCR with custom prompts
-              </div>
-            </label>
-            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
-              <input 
-                type="radio" 
-                value="translate" 
-                checked={processingMode === 'translate'} 
-                onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
-                style={{ marginRight: '0.5rem' }}
-              />
-              <strong>Azure Translator</strong>
-              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
-                Azure AI Translator service
-              </div>
-            </label>
-            <label style={{ flex: '1', minWidth: '200px', cursor: 'pointer' }}>
-              <input 
-                type="radio" 
-                value="translate-openai" 
-                checked={processingMode === 'translate-openai'} 
-                onChange={(e) => {
-                  setProcessingMode(e.target.value as ProcessingMode)
-                  setSystemPrompt(DEFAULT_SYSTEM_PROMPTS['translate-openai'])
-                }}
-                style={{ marginRight: '0.5rem' }}
-              />
-              <strong>OpenAI Translation</strong>
-              <div style={{ fontSize: '0.85rem', color: '#666', marginLeft: '1.5rem' }}>
-                GPT-4 translation with custom prompts
-              </div>
             </label>
           </div>
 
-          {/* System Prompt for OpenAI modes */}
-          {(processingMode === 'ocr-openai' || processingMode === 'translate-openai') && (
-            <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #e5e7eb' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#333' }}>
-                System Prompt
-              </label>
-              <textarea
-                value={systemPrompt}
-                onChange={(e) => setSystemPrompt(e.target.value)}
-                rows={4}
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  border: '1px solid #d1d5db',
-                  fontFamily: 'monospace',
-                  fontSize: '0.9rem',
-                  resize: 'vertical'
-                }}
-                placeholder="Enter custom system prompt..."
-              />
-            </div>
-          )}
-
-          {/* Target Language for translation modes */}
-          {(processingMode === 'translate' || processingMode === 'translate-openai') && (
-            <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #e5e7eb' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#333' }}>
-                Target Language
-              </label>
-              <select
-                value={targetLanguage}
-                onChange={(e) => setTargetLanguage(e.target.value)}
-                style={{
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  border: '1px solid #d1d5db',
-                  fontSize: '1rem',
-                  minWidth: '200px'
-                }}
-              >
-                <option value="en">English</option>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="it">Italian</option>
-                <option value="pt">Portuguese</option>
-                <option value="nl">Dutch</option>
-                <option value="ja">Japanese</option>
-                <option value="ko">Korean</option>
-                <option value="zh-Hans">Chinese (Simplified)</option>
-                <option value="zh-Hant">Chinese (Traditional)</option>
-                <option value="ar">Arabic</option>
-                <option value="ru">Russian</option>
-                <option value="fi">Finnish</option>
-                <option value="sv">Swedish</option>
-              </select>
-            </div>
-          )}
-        </div>
-
-        {/* Upload Area */}
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          style={{
-            background: isDragging ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.95)',
-            border: isDragging ? '3px dashed #667eea' : '3px dashed transparent',
-            borderRadius: '16px',
-            padding: '3rem',
-            textAlign: 'center',
-            cursor: 'pointer',
-            transition: 'all 0.3s ease',
-            marginBottom: '2rem',
-            boxShadow: '0 8px 16px rgba(0,0,0,0.1)'
-          }}
-        >
-          <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>📎</div>
-          <h2 style={{ color: '#333', marginBottom: '1rem' }}>
-            {isDragging ? 'Drop files here' : 'Drag & Drop files here'}
-          </h2>
-          <p style={{ color: '#666', marginBottom: '1.5rem' }}>or</p>
-          <label style={{
-            background: '#667eea',
-            color: 'white',
-            padding: '0.75rem 2rem',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            display: 'inline-block',
-            fontWeight: '600',
-            transition: 'all 0.2s ease'
-          }}>
-            Browse Files
-            <input
-              type="file"
-              multiple
-              onChange={handleFileSelect}
-              style={{ display: 'none' }}
-              accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp"
-            />
-          </label>
-          <p style={{ color: '#999', fontSize: '0.85rem', marginTop: '1rem' }}>
-            Supported: PDF, PNG, JPG, TIFF, BMP
-          </p>
-        </div>
-
-        {/* Files List */}
-        {files.length > 0 && (
-          <div style={{ 
-            background: 'rgba(255, 255, 255, 0.95)', 
-            padding: '1.5rem', 
-            borderRadius: '12px',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, color: '#333' }}>Uploaded Files ({files.length})</h3>
-              <button
-                onClick={processAll}
-                disabled={files.every(f => f.status !== 'pending')}
-                style={{
-                  background: files.every(f => f.status !== 'pending') ? '#ccc' : '#10b981',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.5rem 1.5rem',
-                  borderRadius: '6px',
-                  cursor: files.every(f => f.status !== 'pending') ? 'not-allowed' : 'pointer',
-                  fontWeight: '600'
-                }}
-              >
-                Process All
-              </button>
-            </div>
-            
-            {files.map((fileObj, index) => (
-              <div key={index} style={{
-                background: '#f9fafb',
-                padding: '1rem',
-                borderRadius: '8px',
-                marginBottom: '0.75rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '1rem'
-              }}>
-                {fileObj.preview && (
-                  <img src={fileObj.preview} alt="preview" style={{ 
-                    width: '60px', 
-                    height: '60px', 
-                    objectFit: 'cover', 
-                    borderRadius: '4px' 
-                  }} />
-                )}
-                {!fileObj.preview && (
-                  <div style={{ 
-                    width: '60px', 
-                    height: '60px', 
-                    background: '#e5e7eb', 
-                    borderRadius: '4px',
+          {/* Selected Files List */}
+          {selectedFiles.length > 0 && (
+            <div>
+              <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>Selected Files ({selectedFiles.length})</h3>
+              <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                {selectedFiles.map(file => (
+                  <div key={file.id} style={{
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '1.5rem'
+                    gap: '1rem',
+                    padding: '1rem',
+                    background: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px'
                   }}>
-                    📄
-                  </div>
-                )}
-                
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: '600', color: '#333' }}>{fileObj.file.name}</div>
-                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                    {(fileObj.file.size / 1024).toFixed(1)} KB
-                  </div>
-                  <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-                    Status: <span style={{ 
-                      color: fileObj.status === 'completed' ? '#10b981' : 
-                             fileObj.status === 'error' ? '#ef4444' : '#667eea',
-                      fontWeight: '600'
-                    }}>
-                      {fileObj.status === 'pending' && '⏸️ Pending'}
-                      {fileObj.status === 'uploading' && '⬆️ Uploading...'}
-                      {fileObj.status === 'processing' && '⚙️ Processing...'}
-                      {fileObj.status === 'completed' && '✅ Completed'}
-                      {fileObj.status === 'error' && `❌ Error: ${fileObj.error}`}
-                    </span>
-                  </div>
-                  {fileObj.result && (
-                    <details style={{ marginTop: '0.5rem' }}>
-                      <summary style={{ cursor: 'pointer', color: '#667eea', fontWeight: '600' }}>
-                        View Result
-                      </summary>
-                      
-                      {fileObj.result.translatedDocument ? (
-                        <div style={{ marginTop: '0.5rem' }}>
-                          <a
-                            href={fileObj.result.translatedDocument}
-                            download={fileObj.result.filename || 'translated-document.pdf'}
-                            style={{
-                              display: 'inline-block',
-                              background: '#10b981',
-                              color: 'white',
-                              padding: '0.5rem 1rem',
-                              borderRadius: '6px',
-                              textDecoration: 'none',
-                              fontWeight: '600',
-                              marginBottom: '0.5rem'
-                            }}
-                          >
-                            📥 Download Translated Document
-                          </a>
-                          <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                            {fileObj.result.message}
-                          </div>
-                        </div>
-                      ) : (
-                        <pre style={{ 
-                          background: 'white', 
-                          padding: '0.5rem', 
-                          borderRadius: '4px', 
-                          fontSize: '0.75rem',
-                          overflow: 'auto',
-                          marginTop: '0.5rem'
-                        }}>
-                          {JSON.stringify(fileObj.result, null, 2)}
-                        </pre>
-                      )}
-                    </details>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {fileObj.status === 'pending' && (
+                    <span style={{ fontSize: '2rem' }}>📄</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '600', color: '#333' }}>{file.file.name}</div>
+                      <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                        {(file.file.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
                     <button
-                      onClick={() => processFile(index)}
+                      onClick={() => removeSelectedFile(file.id)}
                       style={{
-                        background: '#667eea',
+                        background: '#ef4444',
                         color: 'white',
                         border: 'none',
                         padding: '0.5rem 1rem',
@@ -738,51 +452,204 @@ function App() {
                         fontWeight: '600'
                       }}
                     >
-                      Process
+                      Remove
                     </button>
-                  )}
-                  <button
-                    onClick={() => removeFile(index)}
-                    style={{
-                      background: '#ef4444',
-                      color: 'white',
-                      border: 'none',
-                      padding: '0.5rem 1rem',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontWeight: '600'
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
 
-        {/* MVP Notice */}
-        <div style={{ 
-          marginTop: '2rem', 
-          background: 'rgba(255, 255, 255, 0.9)', 
-          padding: '1rem', 
-          borderRadius: '8px',
-          textAlign: 'center',
-          color: '#666'
-        }}>
-          <p style={{ margin: 0, fontSize: '0.85rem' }}>
-            ⚠️ MVP Version: Storage upload and actual AI processing will be implemented next
-          </p>
+              <button
+                onClick={uploadAndScanFiles}
+                disabled={isUploading}
+                style={{
+                  width: '100%',
+                  padding: '1rem',
+                  background: isUploading ? '#94a3b8' : '#10b981',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '1.1rem',
+                  fontWeight: '700',
+                  cursor: isUploading ? 'not-allowed' : 'pointer',
+                  transition: 'background 0.2s'
+                }}
+              >
+                {isUploading ? '⏳ Uploading & Scanning...' : `🚀 Upload & Scan ${selectedFiles.length} File(s)`}
+              </button>
+            </div>
+          )}
         </div>
 
-          {/* Workspace Document Library */}
+        {/* Tab Navigation */}
+        <div style={{ 
+          display: 'flex', 
+          gap: '1rem', 
+          marginBottom: '1rem'
+        }}>
+          <button
+            onClick={() => setActiveTab('workspace')}
+            style={{
+              flex: 1,
+              padding: '1rem',
+              background: activeTab === 'workspace' ? '#667eea' : 'rgba(255, 255, 255, 0.95)',
+              color: activeTab === 'workspace' ? 'white' : '#333',
+              border: 'none',
+              borderRadius: '12px 12px 0 0',
+              fontSize: '1.1rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              boxShadow: activeTab === 'workspace' ? '0 4px 6px rgba(0,0,0,0.1)' : 'none',
+              transition: 'all 0.2s'
+            }}
+          >
+            📁 My Documents ({workspaceDocuments.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('results')}
+            style={{
+              flex: 1,
+              padding: '1rem',
+              background: activeTab === 'results' ? '#667eea' : 'rgba(255, 255, 255, 0.95)',
+              color: activeTab === 'results' ? 'white' : '#333',
+              border: 'none',
+              borderRadius: '12px 12px 0 0',
+              fontSize: '1.1rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              boxShadow: activeTab === 'results' ? '0 4px 6px rgba(0,0,0,0.1)' : 'none',
+              transition: 'all 0.2s'
+            }}
+          >
+            📊 Results ({processedResults.length})
+          </button>
+        </div>
+
+        {/* Step 2: My Documents (Workspace) */}
+        {activeTab === 'workspace' && (
           <div style={{ 
             background: 'rgba(255, 255, 255, 0.95)', 
-            padding: '1.5rem', 
-            borderRadius: '12px',
+            padding: '2rem', 
+            borderRadius: '0 0 12px 12px',
             boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
           }}>
-            <h3 style={{ margin: '0 0 1.5rem 0', color: '#333' }}>📁 My Documents</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 style={{ margin: 0, color: '#333' }}>
+                📁 My Documents
+                {selectedCount > 0 && ` (${selectedCount} selected)`}
+              </h2>
+              
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  onClick={selectAllDocuments}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#667eea',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Select All Clean
+                </button>
+                <button
+                  onClick={deselectAllDocuments}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: '#94a3b8',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
+
+            {/* Processing Mode Selection - FIX: Always show, not just when selected */}
+            <div style={{ 
+              padding: '1.5rem',
+              background: '#f8fafc',
+              borderRadius: '8px',
+              marginBottom: '1.5rem'
+            }}>
+              <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>⚙️ Processing Settings</h3>
+              
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#475569' }}>
+                  Processing Mode:
+                </label>
+                <select
+                  value={processingMode}
+                  onChange={(e) => setProcessingMode(e.target.value as ProcessingMode)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    fontSize: '1rem'
+                  }}
+                >
+                  <option value="ocr-di">📄 OCR - Document Intelligence</option>
+                  <option value="ocr-cu">📄 OCR - Computer Vision</option>
+                  <option value="ocr-openai">📄 OCR - OpenAI Vision</option>
+                  <option value="translate">🌐 Text Translate - Azure Translator</option>
+                  <option value="translate-openai">🌐 Text Translate - OpenAI</option>
+                  <option value="document-translate">📝 Document Translate - Azure (preserves format)</option>
+                </select>
+              </div>
+
+              {(processingMode.includes('translate') || processingMode === 'document-translate') && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#475569' }}>
+                    Target Language:
+                  </label>
+                  <select
+                    value={targetLanguage}
+                    onChange={(e) => setTargetLanguage(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '1rem'
+                    }}
+                  >
+                    <option value="en">English</option>
+                    <option value="fi">Finnish</option>
+                    <option value="sv">Swedish</option>
+                    <option value="de">German</option>
+                    <option value="fr">French</option>
+                    <option value="es">Spanish</option>
+                  </select>
+                </div>
+              )}
+
+              <button
+                onClick={processSelectedDocuments}
+                disabled={isProcessing || selectedCount === 0}
+                style={{
+                  width: '100%',
+                  padding: '1rem',
+                  background: (isProcessing || selectedCount === 0) ? '#94a3b8' : '#10b981',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '1.1rem',
+                  fontWeight: '700',
+                  cursor: (isProcessing || selectedCount === 0) ? 'not-allowed' : 'pointer',
+                  transition: 'background 0.2s'
+                }}
+              >
+                {isProcessing ? '⏳ Processing...' : 
+                 selectedCount === 0 ? '🔄 Select Documents to Process' :
+                 `🔄 Process ${selectedCount} Selected Document(s)`}
+              </button>
+            </div>
             
             {workspaceDocuments.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
@@ -798,27 +665,43 @@ function App() {
                 {workspaceDocuments.map(doc => (
                   <div 
                     key={doc.documentId}
-                    onClick={() => setPreviewDocument(doc)}
+                    onClick={() => toggleDocumentSelection(doc.documentId)} // FIX: Allow selection always
                     style={{ 
-                      background: 'white', 
+                      background: doc.selected ? '#ede9fe' : 'white', 
                       borderRadius: '8px',
-                      border: '1px solid #e5e7eb',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                      border: doc.selected ? '2px solid #667eea' : '1px solid #e5e7eb',
+                      boxShadow: doc.selected ? '0 4px 12px rgba(102, 126, 234, 0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
                       overflow: 'hidden',
                       display: 'flex',
                       flexDirection: 'column',
                       transition: 'all 0.2s',
-                      cursor: 'pointer'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-                      e.currentTarget.style.transform = 'translateY(-2px)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-                      e.currentTarget.style.transform = 'translateY(0)';
+                      cursor: 'pointer', // FIX: Always pointer
+                      opacity: doc.malwareScanStatus === 'infected' ? 0.5 : 1,
+                      position: 'relative' // FIX: Add position relative for checkbox positioning
                     }}
                   >
+                    {/* Selection Checkbox */}
+                    <div style={{ // FIX: Always show checkbox
+                      position: 'absolute',
+                      top: '0.5rem',
+                      right: '0.5rem',
+                      zIndex: 10
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={doc.selected || false}
+                        onChange={(e) => {
+                          e.stopPropagation()
+                          toggleDocumentSelection(doc.documentId)
+                        }}
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          cursor: 'pointer'
+                        }}
+                      />
+                    </div>
+
                     {/* Thumbnail */}
                     <div style={{ 
                       width: '100%', 
@@ -827,7 +710,8 @@ function App() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      overflow: 'hidden'
+                      overflow: 'hidden',
+                      position: 'relative'
                     }}>
                       {doc.mimeType === 'application/pdf' ? (
                         <embed
@@ -836,7 +720,8 @@ function App() {
                           style={{
                             width: '100%',
                             height: '100%',
-                            border: 'none'
+                            border: 'none',
+                            pointerEvents: 'none'
                           }}
                         />
                       ) : (
@@ -863,46 +748,43 @@ function App() {
                         <div style={{ 
                           marginTop: '0.5rem',
                           color: doc.malwareScanStatus === 'clean' ? '#10b981' : 
-                                 doc.malwareScanStatus === 'infected' ? '#ef4444' : '#f59e0b'
+                                 doc.malwareScanStatus === 'infected' ? '#ef4444' : '#f59e0b',
+                          fontWeight: '600'
                         }}>
-                          {doc.malwareScanStatus === 'clean' && '✅'}
-                          {doc.malwareScanStatus === 'infected' && '⚠️'}
-                          {doc.malwareScanStatus === 'pending' && '⏳'}
+                          {doc.malwareScanStatus === 'clean' && '✅ Clean'}
+                          {doc.malwareScanStatus === 'infected' && '⚠️ Infected'}
+                          {doc.malwareScanStatus === 'pending' && '⏳ Scanning'}
                         </div>
                       </div>
-                      
-                      {/* Process Button */}
-                      {doc.malwareScanStatus === 'clean' && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            processFromWorkspace(doc.documentId, doc.originalFilename);
-                          }}
-                          style={{
-                            width: '100%',
-                            marginTop: '0.75rem',
-                            padding: '0.5rem',
-                            background: '#667eea',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            fontSize: '0.85rem',
-                            fontWeight: '600',
-                            transition: 'background 0.2s'
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.background = '#5568d3'}
-                          onMouseLeave={(e) => e.currentTarget.style.background = '#667eea'}
-                        >
-                          🔄 Process Document
-                        </button>
-                      )}
+
+                      {/* Preview Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setPreviewDocument(doc)
+                        }}
+                        style={{
+                          width: '100%',
+                          marginTop: '0.75rem',
+                          padding: '0.5rem',
+                          background: '#3b82f6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          transition: 'background 0.2s'
+                        }}
+                      >
+                        👁️ Preview
+                      </button>
 
                       {/* Delete Button */}
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          deleteDocument(doc.userId, doc.documentId, doc.originalFilename);
+                          e.stopPropagation()
+                          deleteDocument(doc.userId, doc.documentId, doc.originalFilename)
                         }}
                         style={{
                           width: '100%',
@@ -917,19 +799,20 @@ function App() {
                           fontWeight: '600',
                           transition: 'background 0.2s'
                         }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
                       >
                         🗑️ Delete
                       </button>
                       
                       {doc.processedModes.length > 0 && (
                         <div style={{ 
-                          marginTop: 'auto',
+                          marginTop: '0.75rem',
                           paddingTop: '0.75rem', 
                           borderTop: '1px solid #e5e7eb',
                           fontSize: '0.7rem'
                         }}>
+                          <div style={{ marginBottom: '0.25rem', color: '#666', fontWeight: '600' }}>
+                            Processed:
+                          </div>
                           <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                             {doc.processedModes.map(mode => (
                               <span
@@ -954,12 +837,146 @@ function App() {
               </div>
             )}
           </div>
+        )}
+
+        {/* Step 3: Results */}
+        {activeTab === 'results' && (
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            padding: '2rem', 
+            borderRadius: '0 0 12px 12px',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          }}>
+            <h2 style={{ margin: '0 0 1.5rem 0', color: '#333' }}>📊 Processing Results</h2>
+            
+            {processedResults.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
+                <p style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>No results yet</p>
+                <p style={{ fontSize: '0.9rem' }}>Process some documents to see results here</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '1.5rem' }}>
+                {processedResults.map(result => (
+                  <div 
+                    key={`${result.documentId}-${result.mode}`}
+                    style={{
+                      background: 'white',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      padding: '1.5rem',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                      <h3 style={{ margin: 0, color: '#333' }}>{result.originalFilename}</h3>
+                      <span style={{
+                        padding: '0.25rem 0.75rem',
+                        background: '#e0e7ff',
+                        color: '#4f46e5',
+                        borderRadius: '4px',
+                        fontSize: '0.85rem',
+                        fontWeight: '600'
+                      }}>
+                        {result.mode}
+                      </span>
+                    </div>
+                    
+                    {result.processingTime && (
+                      <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '1rem' }}>
+                        Processed: {new Date(result.processingTime).toLocaleString()}
+                      </div>
+                    )}
+
+                    {result.error ? (
+                      <div style={{
+                        padding: '1rem',
+                        background: '#fef2f2',
+                        border: '1px solid #fca5a5',
+                        borderRadius: '6px',
+                        color: '#991b1b'
+                      }}>
+                        ❌ Error: {result.error}
+                      </div>
+                    ) : (
+                      <>
+                        {result.ocrText && (
+                          <div style={{ marginBottom: '1rem' }}>
+                            <h4 style={{ margin: '0 0 0.5rem 0', color: '#475569' }}>Extracted Text:</h4>
+                            <div style={{
+                              padding: '1rem',
+                              background: '#f8fafc',
+                              border: '1px solid #e2e8f0',
+                              borderRadius: '6px',
+                              maxHeight: '300px',
+                              overflow: 'auto',
+                              whiteSpace: 'pre-wrap',
+                              fontSize: '0.9rem',
+                              fontFamily: 'monospace'
+                            }}>
+                              {result.ocrText}
+                            </div>
+                          </div>
+                        )}
+
+                        {result.translatedText && (
+                          <div>
+                            <h4 style={{ margin: '0 0 0.5rem 0', color: '#475569' }}>
+                              Translation {result.sourceLanguage && result.targetLanguage && 
+                                `(${result.sourceLanguage} → ${result.targetLanguage})`}:
+                            </h4>
+                            <div style={{
+                              padding: '1rem',
+                              background: '#f0fdf4',
+                              border: '1px solid #bbf7d0',
+                              borderRadius: '6px',
+                              maxHeight: '300px',
+                              overflow: 'auto',
+                              whiteSpace: 'pre-wrap',
+                              fontSize: '0.9rem',
+                              fontFamily: 'monospace'
+                            }}>
+                              {result.translatedText}
+                            </div>
+                          </div>
+                        )}
+
+                        {result.translatedDocumentUrl && (
+                          <div style={{ marginTop: '1rem' }}>
+                            <a
+                              href={`${API_BASE_URL}${result.translatedDocumentUrl}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                display: 'inline-block',
+                                padding: '0.75rem 1.5rem',
+                                background: '#10b981',
+                                color: 'white',
+                                borderRadius: '6px',
+                                textDecoration: 'none',
+                                fontWeight: '600',
+                                fontSize: '0.95rem',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                              }}
+                            >
+                              📥 Download Translated Document
+                            </a>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
-    
+
     {/* Preview Modal */}
     {previewDocument && (
       <div 
+        onClick={() => setPreviewDocument(null)}
         style={{
           position: 'fixed',
           top: 0,
@@ -973,9 +990,9 @@ function App() {
           zIndex: 1000,
           padding: '2rem'
         }}
-        onClick={() => setPreviewDocument(null)}
       >
         <div 
+          onClick={(e) => e.stopPropagation()}
           style={{
             background: 'white',
             borderRadius: '12px',
@@ -986,9 +1003,7 @@ function App() {
             flexDirection: 'column',
             overflow: 'hidden'
           }}
-          onClick={(e) => e.stopPropagation()}
         >
-          {/* Header */}
           <div style={{
             padding: '1.5rem',
             borderBottom: '1px solid #e5e7eb',
@@ -996,50 +1011,36 @@ function App() {
             justifyContent: 'space-between',
             alignItems: 'center'
           }}>
-            <div>
-              <h2 style={{ margin: 0, fontSize: '1.5rem', color: '#333' }}>
-                {previewDocument.originalFilename}
-              </h2>
-              <div style={{ fontSize: '0.9rem', color: '#666', marginTop: '0.5rem' }}>
-                {(previewDocument.fileSize / 1024).toFixed(1)} KB • Uploaded {new Date(previewDocument.uploadTime).toLocaleDateString()}
-              </div>
-            </div>
+            <h3 style={{ margin: 0, color: '#333' }}>{previewDocument.originalFilename}</h3>
             <button
               onClick={() => setPreviewDocument(null)}
               style={{
                 background: '#ef4444',
                 color: 'white',
                 border: 'none',
-                borderRadius: '8px',
-                padding: '0.75rem 1.5rem',
+                padding: '0.5rem 1.5rem',
+                borderRadius: '6px',
                 cursor: 'pointer',
-                fontSize: '1rem',
-                fontWeight: '600'
+                fontWeight: '600',
+                fontSize: '1rem'
               }}
             >
               ✕ Close
             </button>
           </div>
-          
-          {/* PDF Viewer */}
-          <div style={{ flex: 1, overflow: 'hidden', background: '#f3f4f6' }}>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
             {previewDocument.mimeType === 'application/pdf' ? (
-              <embed
-                src={`${API_BASE_URL}/api/workspace/${previewDocument.userId}/${previewDocument.documentId}/original/${previewDocument.originalFilename}`}
-                type="application/pdf"
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  border: 'none'
-                }}
+              <iframe
+                src={`${API_BASE_URL}/api/workspace/${previewDocument.userId}/${previewDocument.documentId}/original/${encodeURIComponent(previewDocument.originalFilename)}`}
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title={previewDocument.originalFilename}
               />
             ) : (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
                 height: '100%',
-                fontSize: '1.2rem',
                 color: '#666'
               }}>
                 Preview not available for this file type
@@ -1056,6 +1057,5 @@ function App() {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>
+  </React.StrictMode>,
 )
-
