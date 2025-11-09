@@ -62,6 +62,7 @@ function App() {
   const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
   const [workspaceDocuments, setWorkspaceDocuments] = useState<WorkspaceDocument[]>([])
+  const [previewDocument, setPreviewDocument] = useState<WorkspaceDocument | null>(null)
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
@@ -309,6 +310,7 @@ function App() {
   }
 
   return (
+    <>
     <div style={{ 
       minHeight: '100vh', 
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -755,6 +757,7 @@ function App() {
                 {workspaceDocuments.map(doc => (
                   <div 
                     key={doc.documentId}
+                    onClick={() => setPreviewDocument(doc)}
                     style={{ 
                       background: 'white', 
                       borderRadius: '8px',
@@ -763,7 +766,16 @@ function App() {
                       overflow: 'hidden',
                       display: 'flex',
                       flexDirection: 'column',
-                      transition: 'box-shadow 0.2s'
+                      transition: 'all 0.2s',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+                      e.currentTarget.style.transform = 'translateY(0)';
                     }}
                   >
                     {/* Thumbnail */}
@@ -821,7 +833,10 @@ function App() {
                       {/* Process Button */}
                       {doc.malwareScanStatus === 'clean' && (
                         <button
-                          onClick={() => processFromWorkspace(doc.documentId, doc.originalFilename)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            processFromWorkspace(doc.documentId, doc.originalFilename);
+                          }}
                           style={{
                             width: '100%',
                             marginTop: '0.75rem',
@@ -875,6 +890,100 @@ function App() {
           </div>
       </div>
     </div>
+    
+    {/* Preview Modal */}
+    {previewDocument && (
+      <div 
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '2rem'
+        }}
+        onClick={() => setPreviewDocument(null)}
+      >
+        <div 
+          style={{
+            background: 'white',
+            borderRadius: '12px',
+            width: '90%',
+            maxWidth: '1200px',
+            height: '90%',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div style={{
+            padding: '1.5rem',
+            borderBottom: '1px solid #e5e7eb',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.5rem', color: '#333' }}>
+                {previewDocument.originalFilename}
+              </h2>
+              <div style={{ fontSize: '0.9rem', color: '#666', marginTop: '0.5rem' }}>
+                {(previewDocument.fileSize / 1024).toFixed(1)} KB • Uploaded {new Date(previewDocument.uploadTime).toLocaleDateString()}
+              </div>
+            </div>
+            <button
+              onClick={() => setPreviewDocument(null)}
+              style={{
+                background: '#ef4444',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '0.75rem 1.5rem',
+                cursor: 'pointer',
+                fontSize: '1rem',
+                fontWeight: '600'
+              }}
+            >
+              ✕ Close
+            </button>
+          </div>
+          
+          {/* PDF Viewer */}
+          <div style={{ flex: 1, overflow: 'hidden', background: '#f3f4f6' }}>
+            {previewDocument.mimeType === 'application/pdf' ? (
+              <embed
+                src={`${API_BASE_URL}/api/workspace/${previewDocument.userId}/${previewDocument.documentId}/original/${previewDocument.originalFilename}`}
+                type="application/pdf"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  border: 'none'
+                }}
+              />
+            ) : (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                fontSize: '1.2rem',
+                color: '#666'
+              }}>
+                Preview not available for this file type
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
 
