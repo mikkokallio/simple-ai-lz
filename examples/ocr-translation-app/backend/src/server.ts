@@ -326,13 +326,17 @@ async function saveResultToWorkspace(
   
   // Save result with appropriate extension
   const resultFilename = filename || `result.${fileExtension}`;
-  const resultBlobClient = containerClient.getBlockBlobClient(
-    `${userId}/${documentId}/results/${mode}/${resultFilename}`
-  );
+  const resultBlobPath = `${userId}/${documentId}/results/${mode}/${resultFilename}`;
+  const resultBlobClient = containerClient.getBlockBlobClient(resultBlobPath);
+  
+  console.log('[SAVE_RESULT] Saving result to:', resultBlobPath);
+  console.log('[SAVE_RESULT] Content length:', content.length, 'Content type:', contentType);
   
   await resultBlobClient.upload(content, content.length, {
     blobHTTPHeaders: { blobContentType: contentType }
   });
+  
+  console.log('[SAVE_RESULT] Successfully saved result');
 }
 
 async function getDocumentMetadata(userId: string, documentId: string): Promise<DocumentMetadata | null> {
@@ -681,6 +685,8 @@ app.get('/api/workspace/:documentId/results', async (req: Request, res: Response
     const userId = req.session.userId || 'demo';
     const { documentId } = req.params;
     
+    console.log('[LIST_RESULTS] Listing results for userId:', userId, 'documentId:', documentId);
+    
     if (!blobServiceClient) {
       return res.status(500).json({ status: 'error', message: 'Storage not configured' });
     }
@@ -688,11 +694,17 @@ app.get('/api/workspace/:documentId/results', async (req: Request, res: Response
     const containerClient = blobServiceClient.getContainerClient('workspace');
     const prefix = `${userId}/${documentId}/results/`;
     
+    console.log('[LIST_RESULTS] Searching with prefix:', prefix);
+    
     const results: any[] = [];
+    let blobCount = 0;
     
     for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+      blobCount++;
+      console.log('[LIST_RESULTS] Found blob:', blob.name);
       // Parse blob path: ${userId}/${documentId}/results/${mode}/${filename}
       const pathParts = blob.name.split('/');
+      console.log('[LIST_RESULTS] Path parts:', pathParts, 'length:', pathParts.length);
       if (pathParts.length >= 5) {
         const mode = pathParts[3];
         const filename = pathParts[4];
@@ -707,6 +719,8 @@ app.get('/api/workspace/:documentId/results', async (req: Request, res: Response
         });
       }
     }
+    
+    console.log('[LIST_RESULTS] Total blobs found:', blobCount, 'results:', results.length);
     
     res.json({
       status: 'success',
