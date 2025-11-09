@@ -269,21 +269,29 @@ async function getDocumentMetadata(userId: string, documentId: string): Promise<
   }
 }
 
-async function listUserDocuments(userId: string): Promise<DocumentMetadata[]> {
+async function listAllDocuments(): Promise<DocumentMetadata[]> {
   if (!blobServiceClient) throw new Error('Storage not configured');
   
   const containerClient = blobServiceClient.getContainerClient('workspace');
   const documents: DocumentMetadata[] = [];
   
-  // List all document folders for this user
-  for await (const blob of containerClient.listBlobsByHierarchy('/', {
-    prefix: `${userId}/`
-  })) {
-    if (blob.kind === 'prefix') {
-      const documentId = blob.name.split('/')[1];
-      const metadata = await getDocumentMetadata(userId, documentId);
-      if (metadata) {
-        documents.push(metadata);
+  // List ALL documents in workspace (no user filtering)
+  // Structure: workspace/{userId}/{documentId}/metadata.json
+  for await (const userBlob of containerClient.listBlobsByHierarchy('/')) {
+    if (userBlob.kind === 'prefix') {
+      const userId = userBlob.name.replace('/', '');
+      
+      // List documents for this user
+      for await (const docBlob of containerClient.listBlobsByHierarchy('/', {
+        prefix: `${userId}/`
+      })) {
+        if (docBlob.kind === 'prefix') {
+          const documentId = docBlob.name.split('/')[1];
+          const metadata = await getDocumentMetadata(userId, documentId);
+          if (metadata) {
+            documents.push(metadata);
+          }
+        }
       }
     }
   }
@@ -367,11 +375,10 @@ app.post('/api/workspace/upload', upload.single('file'), async (req: Request, re
   }
 });
 
-// List user's documents
+// List ALL documents in workspace (no user filtering)
 app.get('/api/workspace/documents', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId!;
-    const documents = await listUserDocuments(userId);
+    const documents = await listAllDocuments();
     
     res.json({
       status: 'success',

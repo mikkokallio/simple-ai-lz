@@ -61,7 +61,6 @@ function App() {
   const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
   const [workspaceDocuments, setWorkspaceDocuments] = useState<WorkspaceDocument[]>([])
-  const [showWorkspace, setShowWorkspace] = useState(false)
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
@@ -305,50 +304,6 @@ function App() {
           </p>
         </div>
 
-        {/* Tab Navigation */}
-        <div style={{ 
-          display: 'flex', 
-          gap: '1rem', 
-          marginBottom: '1rem',
-          justifyContent: 'center'
-        }}>
-          <button
-            onClick={() => setShowWorkspace(false)}
-            style={{
-              background: !showWorkspace ? 'white' : 'rgba(255,255,255,0.3)',
-              color: !showWorkspace ? '#667eea' : 'white',
-              border: 'none',
-              padding: '0.75rem 2rem',
-              borderRadius: '8px',
-              fontSize: '1rem',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'all 0.3s'
-            }}
-          >
-            📤 Upload & Process
-          </button>
-          <button
-            onClick={() => {
-              setShowWorkspace(true)
-              loadWorkspaceDocuments()
-            }}
-            style={{
-              background: showWorkspace ? 'white' : 'rgba(255,255,255,0.3)',
-              color: showWorkspace ? '#667eea' : 'white',
-              border: 'none',
-              padding: '0.75rem 2rem',
-              borderRadius: '8px',
-              fontSize: '1rem',
-              fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'all 0.3s'
-            }}
-          >
-            📁 My Documents ({workspaceDocuments.length})
-          </button>
-        </div>
-
         {/* Health Status */}
         {error && (
           <div style={{ 
@@ -387,8 +342,6 @@ function App() {
         )}
 
         {/* Main Content - Conditionally render Upload or Workspace */}
-        {!showWorkspace ? (
-          <>
         {/* Processing Mode Selector */}
         <div style={{ 
           background: 'rgba(255, 255, 255, 0.95)', 
@@ -751,9 +704,8 @@ function App() {
             ⚠️ MVP Version: Storage upload and actual AI processing will be implemented next
           </p>
         </div>
-          </>
-        ) : (
-          /* Workspace Document Library */
+
+          {/* Workspace Document Library */}
           <div style={{ 
             background: 'rgba(255, 255, 255, 0.95)', 
             padding: '1.5rem', 
@@ -861,7 +813,6 @@ function App() {
               </div>
             )}
           </div>
-        )}
       </div>
     </div>
   )
