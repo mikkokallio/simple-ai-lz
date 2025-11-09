@@ -58,6 +58,7 @@ interface ProcessedResult {
   sourceLanguage?: string
   targetLanguage?: string
   translatedDocumentUrl?: string
+  service?: string
   error?: string
 }
 
@@ -103,6 +104,7 @@ function App() {
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
   const [systemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
+  const [outputFormat, setOutputFormat] = useState<string>('json')
   const [previewDocument, setPreviewDocument] = useState<WorkspaceDocument | null>(null)
   const [activeTab, setActiveTab] = useState<'workspace' | 'results'>('workspace')
 
@@ -127,7 +129,6 @@ function App() {
       .catch(err => setError(err.message))
     
     loadWorkspaceDocuments()
-    loadProcessedResults()
   }, [])
   
   const loadWorkspaceDocuments = async () => {
@@ -149,14 +150,68 @@ function App() {
           malwareScanStatus: 'clean' as const
         }))
         setWorkspaceDocuments(documentsWithUserId)
+        
+        // Load results after documents are loaded
+        loadProcessedResultsForDocuments(documentsWithUserId)
       }
     } catch (error) {
       console.error('Failed to load documents:', error)
     }
   }
 
-  const loadProcessedResults = async () => {
-    // TODO: Implement results loading from backend
+  const loadProcessedResultsForDocuments = async (documents: WorkspaceDocument[]) => {
+    try {
+      // Load results for all documents
+      const allResults: ProcessedResult[] = []
+      
+      for (const doc of documents) {
+        try {
+          const response = await fetch(`${API_BASE_URL}/api/workspace/${doc.documentId}/results`, {
+            credentials: 'include'
+          })
+          
+          if (!response.ok) continue
+          
+          const data = await response.json()
+          if (data.status === 'success' && data.results) {
+            // Convert stored results to ProcessedResult format
+            for (const storedResult of data.results) {
+              // Fetch the actual result content
+              const resultResponse = await fetch(`${API_BASE_URL}/api/workspace/${doc.documentId}/results/${storedResult.mode}`, {
+                credentials: 'include'
+              })
+              
+              if (resultResponse.ok) {
+                const resultData = await resultResponse.json()
+                if (resultData.status === 'success' && resultData.result) {
+                  const result = resultData.result
+                  allResults.push({
+                    documentId: doc.documentId,
+                    userId: doc.userId,
+                    originalFilename: doc.originalFilename,
+                    mode: storedResult.mode as ProcessingMode,
+                    processingTime: storedResult.lastModified || new Date().toISOString(),
+                    ocrText: result.text || result.sourceText,
+                    translatedText: result.translatedText || result.message,
+                    sourceLanguage: result.sourceLanguage,
+                    targetLanguage: result.targetLanguage,
+                    translatedDocumentUrl: result.translatedDocumentUrl,
+                    service: result.service,
+                    error: result.error
+                  })
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to load results for ${doc.documentId}:`, err)
+        }
+      }
+      
+      setProcessedResults(allResults)
+    } catch (error) {
+      console.error('Failed to load processed results:', error)
+    }
   }
 
   // File selection handlers
@@ -266,7 +321,8 @@ function App() {
           body: JSON.stringify({
             mode: processingMode,
             targetLanguage: (processingMode.includes('translate') || processingMode === 'document-translate') ? targetLanguage : undefined,
-            systemPrompt: processingMode.includes('openai') ? systemPrompt : undefined
+            systemPrompt: processingMode.includes('openai') ? systemPrompt : undefined,
+            outputFormat: outputFormat
           })
         })
         
@@ -598,6 +654,30 @@ function App() {
                       <option value="de">German</option>
                       <option value="fr">French</option>
                       <option value="es">Spanish</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Output Format Selection */}
+                {(processingMode.includes('ocr') || processingMode.includes('translate')) && (
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, color: '#323130', fontSize: '13px' }}>
+                      Output Format:
+                    </label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        borderRadius: '2px',
+                        border: '1px solid #8a8886',
+                        fontSize: '13px',
+                        fontFamily: 'inherit'
+                      }}
+                    >
+                      <option value="json">JSON (with metadata)</option>
+                      <option value="txt">Text Only</option>
                     </select>
                   </div>
                 )}
