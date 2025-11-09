@@ -657,7 +657,7 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
     
     console.log(`[PROCESS] userId: ${userId}, documentId: ${documentId}, mode: ${mode}`);
     
-    if (!['ocr', 'translate', 'analyze'].includes(mode)) {
+    if (!['ocr-di', 'ocr-cu', 'ocr-openai', 'translate', 'translate-openai', 'document-translate'].includes(mode)) {
       return res.status(400).json({ status: 'error', message: 'Invalid processing mode' });
     }
     
