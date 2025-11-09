@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
 import { DocumentTable } from './components/DocumentTable'
+import { MessageModal } from './components/MessageModal'
+import { ConfirmModal } from './components/ConfirmModal'
 
 // Runtime configuration
 declare global {
@@ -81,6 +83,21 @@ function App() {
   // Step 3: Processed results
   const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([])
   
+  // Modal state
+  const [messageModal, setMessageModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    type: 'info' | 'success' | 'error' | 'warning'
+  }>({ isOpen: false, title: '', message: '', type: 'info' })
+  
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    onConfirm: () => void
+  }>({ isOpen: false, title: '', message: '', onConfirm: () => {} })
+  
   // UI state
   const [isDragging, setIsDragging] = useState(false)
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
@@ -88,6 +105,15 @@ function App() {
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
   const [previewDocument, setPreviewDocument] = useState<WorkspaceDocument | null>(null)
   const [activeTab, setActiveTab] = useState<'workspace' | 'results'>('workspace')
+
+  // Helper functions for modals
+  const showMessage = (title: string, message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
+    setMessageModal({ isOpen: true, title, message, type })
+  }
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmModal({ isOpen: true, title, message, onConfirm })
+  }
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
@@ -181,7 +207,7 @@ function App() {
   // Upload & Scan - Step 1 to Step 2
   const uploadAndScanFiles = async () => {
     if (selectedFiles.length === 0) {
-      alert('Please select files first')
+      showMessage('No Files Selected', 'Please select files to upload first.', 'warning')
       return
     }
 
@@ -212,9 +238,9 @@ function App() {
       // Reload workspace documents
       await loadWorkspaceDocuments()
       
-      alert(`✅ ${selectedFiles.length} file(s) uploaded successfully!`)
+      showMessage('Upload Successful', `${selectedFiles.length} file(s) uploaded successfully!`, 'success')
     } catch (error) {
-      alert(`❌ Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      showMessage('Upload Failed', `${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
     } finally {
       setIsUploading(false)
     }
@@ -225,7 +251,7 @@ function App() {
     const selectedDocs = workspaceDocuments.filter(doc => doc.selected)
     
     if (selectedDocs.length === 0) {
-      alert('Please select at least one document to process')
+      showMessage('No Documents Selected', 'Please select at least one document to process.', 'warning')
       return
     }
 
@@ -274,36 +300,38 @@ function App() {
       // Switch to results tab
       setActiveTab('results')
       
-      alert(`✅ ${selectedDocs.length} document(s) processed successfully!`)
+      showMessage('Processing Complete', `${selectedDocs.length} document(s) processed successfully!`, 'success')
     } catch (error) {
-      alert(`❌ Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      showMessage('Processing Failed', `${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
     } finally {
       setIsProcessing(false)
     }
   }
 
   const deleteDocument = async (userId: string, documentId: string, filename: string) => {
-    if (!confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone.`)) {
-      return
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/workspace/${userId}/${documentId}`, {
-        method: 'DELETE',
-        credentials: 'include'
-      })
-      
-      if (!response.ok) {
-        throw new Error(`Delete failed: ${response.statusText}`)
+    showConfirm(
+      'Delete Document',
+      `Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone.`,
+      async () => {
+        try {
+          const response = await fetch(`${API_BASE_URL}/api/workspace/${userId}/${documentId}`, {
+            method: 'DELETE',
+            credentials: 'include'
+          })
+          
+          if (!response.ok) {
+            throw new Error(`Delete failed: ${response.statusText}`)
+          }
+          
+          await response.json()
+          showMessage('Delete Successful', 'Document deleted successfully!', 'success')
+          
+          await loadWorkspaceDocuments()
+        } catch (error) {
+          showMessage('Delete Failed', `${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+        }
       }
-      
-      await response.json()
-      alert(`✅ Document deleted successfully!`)
-      
-      await loadWorkspaceDocuments()
-    } catch (error) {
-      alert(`❌ Delete failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    }
+    )
   }
 
   const selectedCount = workspaceDocuments.filter(doc => doc.selected).length
@@ -873,13 +901,12 @@ function App() {
               ]}
               data={processedResults}
               onRowClick={(result) => {
-                // Show result details in alert for now
                 if (result.error) {
-                  alert(`Error: ${result.error}`)
+                  showMessage('Processing Error', result.error, 'error')
                 } else if (result.ocrText) {
-                  alert(`Extracted Text:\n\n${result.ocrText.substring(0, 500)}${result.ocrText.length > 500 ? '...' : ''}`)
+                  showMessage('Extracted Text', result.ocrText.substring(0, 500) + (result.ocrText.length > 500 ? '...' : ''), 'info')
                 } else if (result.translatedText) {
-                  alert(`Translation:\n\n${result.translatedText.substring(0, 500)}${result.translatedText.length > 500 ? '...' : ''}`)
+                  showMessage('Translation', result.translatedText.substring(0, 500) + (result.translatedText.length > 500 ? '...' : ''), 'info')
                 }
               }}
               selectedIds={[]}
@@ -972,6 +999,29 @@ function App() {
         </div>
       </div>
     )}
+
+    {/* Message Modal */}
+    <MessageModal
+      isOpen={messageModal.isOpen}
+      title={messageModal.title}
+      message={messageModal.message}
+      type={messageModal.type}
+      onClose={() => setMessageModal({ ...messageModal, isOpen: false })}
+    />
+
+    {/* Confirm Modal */}
+    <ConfirmModal
+      isOpen={confirmModal.isOpen}
+      title={confirmModal.title}
+      message={confirmModal.message}
+      confirmLabel="Delete"
+      cancelLabel="Cancel"
+      onConfirm={() => {
+        confirmModal.onConfirm()
+        setConfirmModal({ ...confirmModal, isOpen: false })
+      }}
+      onCancel={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+    />
     </>
   )
 }
