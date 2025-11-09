@@ -161,21 +161,32 @@ function App() {
 
   const loadProcessedResultsForDocuments = async (documents: WorkspaceDocument[]) => {
     try {
+      console.log('[LOAD_RESULTS] Loading results for', documents.length, 'documents')
       // Load results for all documents
       const allResults: ProcessedResult[] = []
       
       for (const doc of documents) {
         try {
+          console.log('[LOAD_RESULTS] Fetching results for document:', doc.documentId)
           const response = await fetch(`${API_BASE_URL}/api/workspace/${doc.documentId}/results`, {
             credentials: 'include'
           })
           
-          if (!response.ok) continue
+          console.log('[LOAD_RESULTS] Response status:', response.status, 'for document:', doc.documentId)
+          
+          if (!response.ok) {
+            console.log('[LOAD_RESULTS] Response not OK for', doc.documentId)
+            continue
+          }
           
           const data = await response.json()
+          console.log('[LOAD_RESULTS] Results data for', doc.documentId, ':', data)
+          
           if (data.status === 'success' && data.results) {
+            console.log('[LOAD_RESULTS] Found', data.results.length, 'results for', doc.documentId)
             // Convert stored results to ProcessedResult format
             for (const storedResult of data.results) {
+              console.log('[LOAD_RESULTS] Fetching result content for mode:', storedResult.mode)
               // Fetch the actual result content
               const resultResponse = await fetch(`${API_BASE_URL}/api/workspace/${doc.documentId}/results/${storedResult.mode}`, {
                 credentials: 'include'
@@ -183,6 +194,7 @@ function App() {
               
               if (resultResponse.ok) {
                 const resultData = await resultResponse.json()
+                console.log('[LOAD_RESULTS] Result data:', resultData)
                 if (resultData.status === 'success' && resultData.result) {
                   const result = resultData.result
                   allResults.push({
@@ -208,6 +220,7 @@ function App() {
         }
       }
       
+      console.log('[LOAD_RESULTS] Total results loaded:', allResults.length)
       setProcessedResults(allResults)
     } catch (error) {
       console.error('Failed to load processed results:', error)
@@ -331,23 +344,8 @@ function App() {
           throw new Error(errorData.message || `Processing failed for ${doc.originalFilename}`)
         }
 
-        const responseData = await response.json()
-        const resultData = responseData.result || {}
-        
-        const result: ProcessedResult = {
-          documentId: doc.documentId,
-          userId: doc.userId,
-          originalFilename: doc.originalFilename,
-          mode: processingMode,
-          processingTime: new Date().toISOString(),
-          ocrText: resultData.text || resultData.sourceText,
-          translatedText: resultData.translatedText || resultData.message,
-          sourceLanguage: resultData.sourceLanguage,
-          targetLanguage: resultData.targetLanguage,
-          translatedDocumentUrl: resultData.translatedDocumentUrl
-        }
-        
-        setProcessedResults(prev => [...prev, result])
+        await response.json()
+        // Don't manually add to results - we'll reload from storage
       }
 
       // Reload workspace to update processed modes
