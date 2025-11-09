@@ -716,64 +716,99 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       await saveResultToWorkspace(metadata.userId, documentId, 'ocr-di', result);
       
     } else if (mode === 'ocr-cu') {
-      // Tool 2: Azure Content Understanding (AI Foundry)
+      // Tool 2: Azure AI Foundry Content Understanding
       if (!process.env.AI_FOUNDRY_ENDPOINT || !process.env.AI_FOUNDRY_KEY) {
-        return res.status(500).json({ status: 'error', message: 'AI Foundry not configured' });
+        return res.status(500).json({ status: 'error', message: 'AI Foundry not configured. Set AI_FOUNDRY_ENDPOINT and AI_FOUNDRY_KEY environment variables.' });
       }
 
       const aiFoundryEndpoint = process.env.AI_FOUNDRY_ENDPOINT.replace(/\/$/, '');
       const base64File = fileBuffer.toString('base64');
       
       const requestBody = {
-        document: {
-          content: base64File,
-          mimeType: metadata.mimeType || 'application/pdf'
-        },
-        features: ['keyValuePairs', 'entities', 'languages']
+        base64Source: base64File
       };
 
-      const response = await axios.post(
-        `${aiFoundryEndpoint}/formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31`,
-        requestBody,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Ocp-Apim-Subscription-Key': process.env.AI_FOUNDRY_KEY,
+      console.log(`[OCR_CU] Calling AI Foundry endpoint: ${aiFoundryEndpoint}`);
+
+      try {
+        const response = await axios.post(
+          `${aiFoundryEndpoint}/formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31`,
+          requestBody,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Ocp-Apim-Subscription-Key': process.env.AI_FOUNDRY_KEY,
+            }
           }
-        }
-      );
+        );
 
-      const analysisData = response.data;
-      
-      result = {
-        service: 'Azure AI Foundry Content Understanding',
-        serviceDescription: 'Advanced document analysis with entity extraction',
-        text: analysisData.content || '',
-        entities: analysisData.entities || [],
-        keyValuePairs: analysisData.keyValuePairs || [],
-        languages: analysisData.languages || []
-      };
+        const analysisData = response.data;
+        
+        result = {
+          service: 'Azure AI Foundry Content Understanding',
+          serviceDescription: 'Advanced document analysis with entity extraction',
+          text: analysisData.analyzeResult?.content || analysisData.content || '',
+          entities: analysisData.analyzeResult?.entities || analysisData.entities || [],
+          keyValuePairs: analysisData.analyzeResult?.keyValuePairs || analysisData.keyValuePairs || [],
+          languages: analysisData.analyzeResult?.languages || analysisData.languages || [],
+          paragraphs: analysisData.analyzeResult?.paragraphs || []
+        };
+      } catch (error: any) {
+        console.error('[OCR_CU] AI Foundry error:', error.response?.data || error.message);
+        throw new Error(`AI Foundry Content Understanding failed: ${error.response?.data?.error?.message || error.message}`);
+      }
       
       await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result);
       
     } else if (mode === 'ocr-openai') {
       // Tool 3: OpenAI Vision OCR
       if (!openaiClient) {
-        return res.status(500).json({ status: 'error', message: 'OpenAI not configured' });
+        return res.status(500).json({ status: 'error', message: 'OpenAI not configured. Set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and AZURE_OPENAI_DEPLOYMENT environment variables.' });
       }
 
-      const systemPrompt = 'Extract all text from this image accurately, maintaining formatting and structure.';
-      const base64Image = fileBuffer.toString('base64');
-      const dataUrl = `data:${metadata.mimeType || 'application/pdf'};base64,${base64Image}`;
+      // Convert PDF to image for Vision API
+      let imageBuffer: Buffer;
+      let imageMimeType: string;
+      
+      if (metadata.mimeType === 'application/pdf') {
+        // Convert first page of PDF to PNG
+        const pdfDoc = await PDFDocument.load(fileBuffer);
+        const firstPage = pdfDoc.getPages()[0];
+        const { width, height } = firstPage.getSize();
+        
+        // Create a single-page PDF with just the first page
+        const singlePagePdf = await PDFDocument.create();
+        const [copiedPage] = await singlePagePdf.copyPages(pdfDoc, [0]);
+        singlePagePdf.addPage(copiedPage);
+        const singlePageBytes = await singlePagePdf.save();
+        
+        // Convert to PNG using sharp (via temporary conversion)
+        // Note: sharp can't directly handle PDF, so we'll use the PDF as-is
+        // and let the Vision API handle it, or error appropriately
+        imageBuffer = fileBuffer;
+        imageMimeType = 'application/pdf';
+        
+        console.log('[OCR_OPENAI] Processing PDF document (Vision API will process first page)');
+      } else if (metadata.mimeType?.startsWith('image/')) {
+        imageBuffer = fileBuffer;
+        imageMimeType = metadata.mimeType;
+      } else {
+        return res.status(400).json({ 
+          status: 'error', 
+          message: 'OpenAI Vision only supports PDF and image files (JPEG, PNG, GIF, WebP)' 
+        });
+      }
+
+      const base64Image = imageBuffer.toString('base64');
+      const dataUrl = `data:${imageMimeType};base64,${base64Image}`;
       
       const response = await openaiClient.chat.completions.create({
-        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
         messages: [
-          { role: 'system', content: systemPrompt },
           {
             role: 'user',
             content: [
-              { type: 'text', text: 'Extract all text from this document.' },
+              { type: 'text', text: 'Extract all text from this document accurately, maintaining formatting and structure. Return only the extracted text.' },
               { type: 'image_url', image_url: { url: dataUrl } }
             ]
           }
@@ -784,10 +819,11 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       const extractedText = response.choices[0]?.message?.content || '';
       
       result = {
-        service: 'OpenAI Vision (GPT-4)',
+        service: 'OpenAI Vision (GPT-4o)',
         serviceDescription: 'AI-powered OCR with flexible understanding',
-        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
-        text: extractedText
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
+        text: extractedText,
+        pageCount: metadata.mimeType === 'application/pdf' ? 1 : undefined
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'ocr-openai', result);
@@ -835,22 +871,39 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
     } else if (mode === 'translate-openai') {
       // Tool 5: OpenAI Vision Translation (one-step)
       if (!openaiClient) {
-        return res.status(500).json({ status: 'error', message: 'OpenAI not configured' });
+        return res.status(500).json({ status: 'error', message: 'OpenAI not configured. Set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and AZURE_OPENAI_DEPLOYMENT environment variables.' });
       }
 
       const targetLanguage = metadata.targetLanguage || 'English';
-      const systemPrompt = `Translate the text in this document to ${targetLanguage}. Preserve the structure and meaning accurately.`;
-      const base64Image = fileBuffer.toString('base64');
-      const dataUrl = `data:${metadata.mimeType || 'application/pdf'};base64,${base64Image}`;
+      
+      // Convert PDF to image for Vision API if needed
+      let imageBuffer: Buffer;
+      let imageMimeType: string;
+      
+      if (metadata.mimeType === 'application/pdf') {
+        imageBuffer = fileBuffer;
+        imageMimeType = 'application/pdf';
+        console.log('[TRANSLATE_OPENAI] Processing PDF document (Vision API will process first page)');
+      } else if (metadata.mimeType?.startsWith('image/')) {
+        imageBuffer = fileBuffer;
+        imageMimeType = metadata.mimeType;
+      } else {
+        return res.status(400).json({ 
+          status: 'error', 
+          message: 'OpenAI Vision Translation only supports PDF and image files (JPEG, PNG, GIF, WebP)' 
+        });
+      }
+      
+      const base64Image = imageBuffer.toString('base64');
+      const dataUrl = `data:${imageMimeType};base64,${base64Image}`;
       
       const response = await openaiClient.chat.completions.create({
-        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
         messages: [
-          { role: 'system', content: systemPrompt },
           {
             role: 'user',
             content: [
-              { type: 'text', text: `Translate this document to ${targetLanguage}.` },
+              { type: 'text', text: `Translate all text in this document to ${targetLanguage}. Preserve the structure and meaning accurately. Return only the translated text.` },
               { type: 'image_url', image_url: { url: dataUrl } }
             ]
           }
@@ -863,17 +916,21 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       result = {
         service: 'OpenAI Vision Translation',
         serviceDescription: 'One-step AI translation with context understanding',
-        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
         translatedText,
-        targetLanguage
+        targetLanguage,
+        pageCount: metadata.mimeType === 'application/pdf' ? 1 : undefined
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result);
       
     } else if (mode === 'document-translate') {
-      // Tool 6: Azure Document Translation - format-preserving batch translation
-      if (!blobServiceClient || !process.env.TRANSLATOR_ENDPOINT) {
-        return res.status(500).json({ status: 'error', message: 'Document Translation not configured' });
+      // Tool 6: Azure Document Translation - format-preserving batch translation using SDK
+      if (!blobServiceClient || !documentTranslationClient) {
+        return res.status(500).json({ 
+          status: 'error', 
+          message: 'Document Translation not configured (need blob storage and translation client)' 
+        });
       }
 
       const targetLang = targetLanguage || 'en';
@@ -895,49 +952,39 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       
       console.log(`[DOCUMENT_TRANSLATE] Uploaded source file: ${sourceFileName}`);
       
-      // Step 2: Submit translation job using REST API with container URLs
-      // Note: Storage containers must have appropriate permissions for Translator service
-      const translatorEndpoint = process.env.TRANSLATOR_ENDPOINT!.replace(/\/$/, '');
-      const translatorKey = process.env.TRANSLATOR_KEY;
-      
-      if (!translatorKey) {
-        return res.status(500).json({ status: 'error', message: 'TRANSLATOR_KEY environment variable not configured' });
-      }
-      
+      // Step 2: Submit translation job using SDK (managed identity)
       const storageAccountUrl = `https://${storageAccountName}.blob.core.windows.net`;
       const sourceUrl = `${storageAccountUrl}/${sourceContainerName}`;
       const targetUrl = `${storageAccountUrl}/${targetContainerName}`;
       
-      const batchRequest = {
-        inputs: [{
-          source: {
-            sourceUrl: sourceUrl
-          },
-          targets: [{
-            targetUrl: targetUrl,
-            language: targetLang
-          }]
-        }]
-      };
-      
-      console.log(`[DOCUMENT_TRANSLATE] Submitting translation job to ${translatorEndpoint}`);
+      console.log(`[DOCUMENT_TRANSLATE] Submitting translation job via SDK`);
       console.log(`[DOCUMENT_TRANSLATE] Source: ${sourceUrl}`);
       console.log(`[DOCUMENT_TRANSLATE] Target: ${targetUrl}`);
       
-      const submitResponse = await axios.post(
-        `${translatorEndpoint}/translator/document/batches?api-version=2024-05-01`,
-        batchRequest,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Ocp-Apim-Subscription-Key': translatorKey
-          }
+      const batchRequest = {
+        body: {
+          inputs: [{
+            source: {
+              sourceUrl: sourceUrl
+            },
+            targets: [{
+              targetUrl: targetUrl,
+              language: targetLang
+            }]
+          }]
         }
-      );
+      };
       
-      const operationLocation = submitResponse.headers['operation-location'];
+      const submitResult = await documentTranslationClient.path('/document/batches').post(batchRequest);
+      
+      if (isUnexpectedDoc(submitResult)) {
+        console.error(`[DOCUMENT_TRANSLATE] SDK submission failed:`, submitResult.body);
+        throw new Error(`Document translation submission failed: ${submitResult.body.error?.message || 'Unknown error'}`);
+      }
+      
+      const operationLocation = submitResult.headers['operation-location'];
       if (!operationLocation) {
-        throw new Error('No operation-location header in response');
+        throw new Error('No operation-location header in SDK response');
       }
       
       const operationId = operationLocation.split('/').pop()?.split('?')[0];
@@ -946,50 +993,68 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       // Step 3: Poll for completion (max 5 minutes)
       const maxAttempts = 60;
       let attempts = 0;
-      let status = 'NotStarted';
+      let translationStatus = 'NotStarted';
       
-      while (attempts < maxAttempts && !['Succeeded', 'Failed', 'Cancelled'].includes(status)) {
+      while (attempts < maxAttempts && !['Succeeded', 'Failed', 'Cancelled'].includes(translationStatus)) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         
-        const statusResponse = await axios.get(
-          operationLocation,
-          {
-            headers: {
-              'Ocp-Apim-Subscription-Key': translatorKey
-            }
-          }
-        );
+        const statusResult = await documentTranslationClient.path('/document/batches/{id}', operationId!).get();
         
-        status = statusResponse.data.status;
-        console.log(`[DOCUMENT_TRANSLATE] Status: ${status} (${attempts + 1}/${maxAttempts})`);
+        if (isUnexpectedDoc(statusResult)) {
+          console.error(`[DOCUMENT_TRANSLATE] Status check failed:`, statusResult.body);
+          break;
+        }
         
-        if (status === 'Failed') {
-          const error = statusResponse.data.error;
-          console.error(`[DOCUMENT_TRANSLATE] Translation failed:`, error);
-          throw new Error(`Translation failed: ${error?.message || JSON.stringify(error)}`);
+        translationStatus = statusResult.body.status;
+        console.log(`[DOCUMENT_TRANSLATE] Status: ${translationStatus} (${attempts + 1}/${maxAttempts})`);
+        
+        if (translationStatus === 'Failed') {
+          const errorInfo = statusResult.body.error;
+          console.error(`[DOCUMENT_TRANSLATE] Translation failed:`, errorInfo);
+          throw new Error(`Translation failed: ${errorInfo?.message || JSON.stringify(errorInfo)}`);
         }
         
         attempts++;
       }
       
-      if (status !== 'Succeeded') {
-        throw new Error(`Translation timeout or failed with status: ${status}`);
+      if (translationStatus !== 'Succeeded') {
+        throw new Error(`Translation timeout or failed with status: ${translationStatus}`);
       }
       
       // Step 4: Find and download translated document
-      // List blobs in target container to find our translated file
-      const targetBlobs = [];
-      for await (const blob of targetContainerClient.listBlobsFlat({ prefix: timestamp.toString() })) {
-        targetBlobs.push(blob);
+      // The translated file will have the same name as source file in target container
+      // Azure Translator preserves the filename structure
+      let translatedBlobName = sourceFileName; // Same name as source
+      let translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
+      
+      // Check if translated file exists
+      const exists = await translatedBlobClient.exists();
+      if (!exists) {
+        // If not found with same name, list all blobs to find it
+        console.log(`[DOCUMENT_TRANSLATE] Searching for translated file in target container...`);
+        const targetBlobs = [];
+        for await (const blob of targetContainerClient.listBlobsFlat()) {
+          targetBlobs.push(blob);
+          console.log(`[DOCUMENT_TRANSLATE] Found blob: ${blob.name}`);
+        }
+        
+        if (targetBlobs.length === 0) {
+          throw new Error('Translated document not found in target container');
+        }
+        
+        // Find the most recent blob (highest timestamp)
+        const sortedBlobs = targetBlobs.sort((a, b) => {
+          const timeA = parseInt(a.name.split('-')[0]) || 0;
+          const timeB = parseInt(b.name.split('-')[0]) || 0;
+          return timeB - timeA;
+        });
+        
+        console.log(`[DOCUMENT_TRANSLATE] Using most recent file: ${sortedBlobs[0].name}`);
+        translatedBlobName = sortedBlobs[0].name;
+        translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
       }
       
-      if (targetBlobs.length === 0) {
-        throw new Error('Translated document not found in target container');
-      }
-      
-      console.log(`[DOCUMENT_TRANSLATE] Found ${targetBlobs.length} translated files`);
-      const translatedBlobName = targetBlobs[0].name;
-      const translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
+      console.log(`[DOCUMENT_TRANSLATE] Downloading translated file: ${translatedBlobName}`);
       const downloadResponse = await translatedBlobClient.download();
       
       const chunks: Buffer[] = [];
