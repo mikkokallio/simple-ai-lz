@@ -160,6 +160,8 @@ interface DocumentMetadata {
   malwareScanTime?: string;
   processedModes: string[];
   lastAccessed: string;
+  targetLanguage?: string;
+  sourceLanguage?: string;
 }
 
 // Generate thumbnail for PDF (first page, 200x200px)
@@ -257,7 +259,7 @@ async function saveToWorkspace(
 async function saveResultToWorkspace(
   userId: string,
   documentId: string,
-  mode: 'ocr' | 'translate' | 'analyze' | 'document-translate',
+  mode: 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai' | 'document-translate',
   result: any,
   filename?: string
 ): Promise<void> {
@@ -691,11 +693,11 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
     const downloadResponse = await originalBlobClient.download();
     const fileBuffer = await streamToBuffer(downloadResponse.readableStreamBody!);
     
-    // FIX: Actually process the document based on mode
+    // Process the document based on mode - 6 distinct tools
     let result: any;
     
-    if (mode === 'ocr') {
-      // Use Document Intelligence for OCR
+    if (mode === 'ocr-di') {
+      // Tool 1: Azure Document Intelligence OCR
       if (!documentAnalysisClient) {
         return res.status(500).json({ status: 'error', message: 'Document Intelligence not configured' });
       }
@@ -705,14 +707,170 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       
       result = {
         service: 'Azure Document Intelligence',
+        serviceDescription: 'Microsoft OCR optimized for forms and structured documents',
         model: 'prebuilt-read',
         text: analysisResult.content || '',
         pageCount: analysisResult.pages?.length || 0
       };
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'ocr', result);
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-di', result);
+      
+    } else if (mode === 'ocr-cu') {
+      // Tool 2: Azure Content Understanding (AI Foundry)
+      if (!process.env.AI_FOUNDRY_ENDPOINT || !process.env.AI_FOUNDRY_KEY) {
+        return res.status(500).json({ status: 'error', message: 'AI Foundry not configured' });
+      }
+
+      const aiFoundryEndpoint = process.env.AI_FOUNDRY_ENDPOINT.replace(/\/$/, '');
+      const base64File = fileBuffer.toString('base64');
+      
+      const requestBody = {
+        document: {
+          content: base64File,
+          mimeType: metadata.mimeType || 'application/pdf'
+        },
+        features: ['keyValuePairs', 'entities', 'languages']
+      };
+
+      const response = await axios.post(
+        `${aiFoundryEndpoint}/formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31`,
+        requestBody,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Ocp-Apim-Subscription-Key': process.env.AI_FOUNDRY_KEY,
+          }
+        }
+      );
+
+      const analysisData = response.data;
+      
+      result = {
+        service: 'Azure AI Foundry Content Understanding',
+        serviceDescription: 'Advanced document analysis with entity extraction',
+        text: analysisData.content || '',
+        entities: analysisData.entities || [],
+        keyValuePairs: analysisData.keyValuePairs || [],
+        languages: analysisData.languages || []
+      };
+      
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result);
+      
+    } else if (mode === 'ocr-openai') {
+      // Tool 3: OpenAI Vision OCR
+      if (!openaiClient) {
+        return res.status(500).json({ status: 'error', message: 'OpenAI not configured' });
+      }
+
+      const systemPrompt = 'Extract all text from this image accurately, maintaining formatting and structure.';
+      const base64Image = fileBuffer.toString('base64');
+      const dataUrl = `data:${metadata.mimeType || 'application/pdf'};base64,${base64Image}`;
+      
+      const response = await openaiClient.chat.completions.create({
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Extract all text from this document.' },
+              { type: 'image_url', image_url: { url: dataUrl } }
+            ]
+          }
+        ],
+        max_tokens: 4096
+      });
+
+      const extractedText = response.choices[0]?.message?.content || '';
+      
+      result = {
+        service: 'OpenAI Vision (GPT-4)',
+        serviceDescription: 'AI-powered OCR with flexible understanding',
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        text: extractedText
+      };
+      
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-openai', result);
       
     } else if (mode === 'translate') {
+      // Tool 4: Azure Document Intelligence + Azure Text Translator
+      if (!documentAnalysisClient || !translationClient) {
+        return res.status(500).json({ status: 'error', message: 'Translation service not configured' });
+      }
+      
+      const poller = await documentAnalysisClient.beginAnalyzeDocument('prebuilt-read', fileBuffer);
+      const analysisResult = await poller.pollUntilDone();
+      const extractedText = analysisResult.content || '';
+      
+      const targetLanguage = metadata.targetLanguage || 'en';
+      const sourceLanguage = metadata.sourceLanguage || undefined;
+      
+      const translationResult = await translationClient.path('/translate').post({
+        body: [{ text: extractedText }],
+        queryParameters: {
+          to: targetLanguage,
+          ...(sourceLanguage && { from: sourceLanguage }),
+          'api-version': '3.0'
+        }
+      });
+
+      if (translationResult.status !== '200') {
+        throw new Error('Translation failed');
+      }
+
+      const body = translationResult.body as any;
+      const translationData = body[0];
+      
+      result = {
+        service: 'Azure Document Intelligence + Azure Text Translator',
+        serviceDescription: 'Two-step OCR then translate (text only)',
+        originalText: extractedText,
+        translatedText: translationData.translations[0].text,
+        targetLanguage,
+        sourceLanguage: translationData.detectedLanguage?.language || sourceLanguage
+      };
+      
+      await saveResultToWorkspace(metadata.userId, documentId, 'translate', result);
+      
+    } else if (mode === 'translate-openai') {
+      // Tool 5: OpenAI Vision Translation (one-step)
+      if (!openaiClient) {
+        return res.status(500).json({ status: 'error', message: 'OpenAI not configured' });
+      }
+
+      const targetLanguage = metadata.targetLanguage || 'English';
+      const systemPrompt = `Translate the text in this document to ${targetLanguage}. Preserve the structure and meaning accurately.`;
+      const base64Image = fileBuffer.toString('base64');
+      const dataUrl = `data:${metadata.mimeType || 'application/pdf'};base64,${base64Image}`;
+      
+      const response = await openaiClient.chat.completions.create({
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `Translate this document to ${targetLanguage}.` },
+              { type: 'image_url', image_url: { url: dataUrl } }
+            ]
+          }
+        ],
+        max_tokens: 4096
+      });
+
+      const translatedText = response.choices[0]?.message?.content || '';
+      
+      result = {
+        service: 'OpenAI Vision Translation',
+        serviceDescription: 'One-step AI translation with context understanding',
+        model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4-vision',
+        translatedText,
+        targetLanguage
+      };
+      
+      await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result);
+      
+    } else if (mode === 'document-translate') {
       // First do OCR, then translate
       if (!documentAnalysisClient || !translationClient) {
         return res.status(500).json({ status: 'error', message: 'Required services not configured' });
@@ -954,7 +1112,7 @@ app.post('/api/ocr/document-intelligence', upload.single('file'), async (req: Re
     // Save result to workspace if documentId provided
     if (documentId && userId) {
       try {
-        await saveResultToWorkspace(userId, documentId, 'ocr', resultData);
+        await saveResultToWorkspace(userId, documentId, 'ocr-di', resultData);
         console.log(`Saved OCR-DI result to workspace for document ${documentId}`);
       } catch (saveError) {
         console.error('Failed to save result to workspace:', saveError);

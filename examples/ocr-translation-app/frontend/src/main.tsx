@@ -262,7 +262,7 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            mode: processingMode === 'document-translate' ? 'document-translate' : processingMode.includes('ocr') ? 'ocr' : processingMode.includes('translate') ? 'translate' : 'analyze',
+            mode: processingMode,
             targetLanguage: (processingMode.includes('translate') || processingMode === 'document-translate') ? targetLanguage : undefined,
             systemPrompt: processingMode.includes('openai') ? systemPrompt : undefined
           })
@@ -594,12 +594,12 @@ function App() {
                     fontSize: '1rem'
                   }}
                 >
-                  <option value="ocr-di">📄 OCR - Document Intelligence</option>
-                  <option value="ocr-cu">📄 OCR - Computer Vision</option>
-                  <option value="ocr-openai">📄 OCR - OpenAI Vision</option>
-                  <option value="translate">🌐 Text Translate - Azure Translator</option>
-                  <option value="translate-openai">🌐 Text Translate - OpenAI</option>
-                  <option value="document-translate">📝 Document Translate - Azure (preserves format)</option>
+                  <option value="ocr-di">📄 OCR: Document Intelligence (Best for forms)</option>
+                  <option value="ocr-cu">📄 OCR: Content Understanding (Extracts entities)</option>
+                  <option value="ocr-openai">📄 OCR: OpenAI Vision (AI-powered)</option>
+                  <option value="translate">🌐 Text Translate: Azure (OCR + Translator)</option>
+                  <option value="translate-openai">🌐 Text Translate: OpenAI (One-step)</option>
+                  <option value="document-translate">📝 Document Translate: Azure (Preserves format)</option>
                 </select>
               </div>
 
