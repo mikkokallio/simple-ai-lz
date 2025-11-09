@@ -9,7 +9,7 @@ import session from 'express-session';
 import { v4 as uuidv4 } from 'uuid';
 import * as appInsights from 'applicationinsights';
 import { DefaultAzureCredential } from '@azure/identity';
-import { BlobServiceClient, BlockBlobClient } from '@azure/storage-blob';
+import { BlobServiceClient, BlockBlobClient, generateBlobSASQueryParameters, BlobSASPermissions, SASProtocol } from '@azure/storage-blob';
 import { OpenAI } from 'openai';
 import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
 import TextTranslationClient, { isUnexpected } from '@azure-rest/ai-translation-text';
@@ -871,47 +871,9 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result);
       
     } else if (mode === 'document-translate') {
-      // First do OCR, then translate
-      if (!documentAnalysisClient || !translationClient) {
-        return res.status(500).json({ status: 'error', message: 'Required services not configured' });
-      }
-      
-      // OCR first
-      const poller = await documentAnalysisClient.beginAnalyzeDocument('prebuilt-read', fileBuffer);
-      const analysisResult = await poller.pollUntilDone();
-      const extractedText = analysisResult.content || '';
-      
-      // Then translate
-      const targetLang = targetLanguage || 'en';
-      const translateResponse = await translationClient.path('/translate').post({
-        body: [{ text: extractedText }],
-        queryParameters: {
-          to: targetLang,
-          'api-version': '3.0'
-        }
-      });
-      
-      if (translateResponse.status !== '200') {
-        throw new Error('Translation failed');
-      }
-      
-      const body = translateResponse.body as any;
-      const translationResult = body[0];
-      
-      result = {
-        service: 'Azure Translator',
-        sourceText: extractedText,
-        translatedText: translationResult.translations[0].text,
-        sourceLanguage: translationResult.detectedLanguage?.language || 'unknown',
-        targetLanguage: targetLang
-      };
-      
-      await saveResultToWorkspace(metadata.userId, documentId, 'translate', result);
-      
-    } else if (mode === 'document-translate') {
-      // Document Translation mode - blob-based batch translation
-      if (!documentTranslationClient || !blobServiceClient) {
-        throw new Error('Document Translation or Storage not configured');
+      // Tool 6: Azure Document Translation - format-preserving batch translation
+      if (!blobServiceClient || !process.env.TRANSLATOR_ENDPOINT) {
+        return res.status(500).json({ status: 'error', message: 'Document Translation not configured' });
       }
 
       const targetLang = targetLanguage || 'en';
@@ -921,6 +883,7 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       const sourceContainerName = 'translation-source';
       const targetContainerName = 'translation-target';
       const sourceContainerClient = blobServiceClient.getContainerClient(sourceContainerName);
+      const targetContainerClient = blobServiceClient.getContainerClient(targetContainerName);
       
       const timestamp = Date.now();
       const sourceFileName = `${timestamp}-${metadata.originalFilename}`;
@@ -932,7 +895,15 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       
       console.log(`[DOCUMENT_TRANSLATE] Uploaded source file: ${sourceFileName}`);
       
-      // Step 2: Submit translation job (uses managed identity)
+      // Step 2: Submit translation job using REST API with container URLs
+      // Note: Storage containers must have appropriate permissions for Translator service
+      const translatorEndpoint = process.env.TRANSLATOR_ENDPOINT!.replace(/\/$/, '');
+      const translatorKey = process.env.TRANSLATOR_KEY;
+      
+      if (!translatorKey) {
+        return res.status(500).json({ status: 'error', message: 'TRANSLATOR_KEY environment variable not configured' });
+      }
+      
       const storageAccountUrl = `https://${storageAccountName}.blob.core.windows.net`;
       const sourceUrl = `${storageAccountUrl}/${sourceContainerName}`;
       const targetUrl = `${storageAccountUrl}/${targetContainerName}`;
@@ -940,8 +911,7 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       const batchRequest = {
         inputs: [{
           source: {
-            sourceUrl: sourceUrl,
-            filter: { prefix: `${timestamp}-` }
+            sourceUrl: sourceUrl
           },
           targets: [{
             targetUrl: targetUrl,
@@ -950,57 +920,77 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
         }]
       };
       
-      const translationResponse = await documentTranslationClient.path('/document/batches').post({
-        body: batchRequest
-      });
+      console.log(`[DOCUMENT_TRANSLATE] Submitting translation job to ${translatorEndpoint}`);
+      console.log(`[DOCUMENT_TRANSLATE] Source: ${sourceUrl}`);
+      console.log(`[DOCUMENT_TRANSLATE] Target: ${targetUrl}`);
       
-      if (isUnexpectedDoc(translationResponse)) {
-        throw new Error(`Translation job failed: ${translationResponse.body.error?.message || 'Unknown error'}`);
+      const submitResponse = await axios.post(
+        `${translatorEndpoint}/translator/document/batches?api-version=2024-05-01`,
+        batchRequest,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Ocp-Apim-Subscription-Key': translatorKey
+          }
+        }
+      );
+      
+      const operationLocation = submitResponse.headers['operation-location'];
+      if (!operationLocation) {
+        throw new Error('No operation-location header in response');
       }
       
-      const operationLocation = translationResponse.headers['operation-location'];
-      if (!operationLocation) throw new Error('No operation-location header');
-      
-      const urlParts = operationLocation.split('/');
-      const operationId = urlParts[urlParts.length - 1].split('?')[0];
-      
+      const operationId = operationLocation.split('/').pop()?.split('?')[0];
       console.log(`[DOCUMENT_TRANSLATE] Translation job ID: ${operationId}`);
       
       // Step 3: Poll for completion (max 5 minutes)
       const maxAttempts = 60;
       let attempts = 0;
       let status = 'NotStarted';
-      let translatedPath = '';
       
       while (attempts < maxAttempts && !['Succeeded', 'Failed', 'Cancelled'].includes(status)) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         
-        const statusResponse = await documentTranslationClient.path('/document/batches/{id}', operationId).get();
-        if (isUnexpectedDoc(statusResponse)) throw new Error('Failed to get status');
+        const statusResponse = await axios.get(
+          operationLocation,
+          {
+            headers: {
+              'Ocp-Apim-Subscription-Key': translatorKey
+            }
+          }
+        );
         
-        status = statusResponse.body.status;
+        status = statusResponse.data.status;
         console.log(`[DOCUMENT_TRANSLATE] Status: ${status} (${attempts + 1}/${maxAttempts})`);
         
-        if (status === 'Succeeded') {
-          const documentsResponse = await documentTranslationClient.path('/document/batches/{id}/documents', operationId).get();
-          if (!isUnexpectedDoc(documentsResponse)) {
-            const documents = documentsResponse.body.value;
-            const doc = documents?.find(d => d.sourcePath?.includes(sourceFileName));
-            if (doc) translatedPath = doc.path || '';
-          }
-        } else if (status === 'Failed') {
-          throw new Error('Translation failed');
+        if (status === 'Failed') {
+          const error = statusResponse.data.error;
+          console.error(`[DOCUMENT_TRANSLATE] Translation failed:`, error);
+          throw new Error(`Translation failed: ${error?.message || JSON.stringify(error)}`);
         }
         
         attempts++;
       }
       
-      if (status !== 'Succeeded') throw new Error(`Translation timeout or failed: ${status}`);
+      if (status !== 'Succeeded') {
+        throw new Error(`Translation timeout or failed with status: ${status}`);
+      }
       
-      // Step 4: Download and save translated document
-      const targetBlobClient = blobServiceClient.getContainerClient(targetContainerName)
-        .getBlockBlobClient(translatedPath.split('/').pop()!);
-      const downloadResponse = await targetBlobClient.download();
+      // Step 4: Find and download translated document
+      // List blobs in target container to find our translated file
+      const targetBlobs = [];
+      for await (const blob of targetContainerClient.listBlobsFlat({ prefix: timestamp.toString() })) {
+        targetBlobs.push(blob);
+      }
+      
+      if (targetBlobs.length === 0) {
+        throw new Error('Translated document not found in target container');
+      }
+      
+      console.log(`[DOCUMENT_TRANSLATE] Found ${targetBlobs.length} translated files`);
+      const translatedBlobName = targetBlobs[0].name;
+      const translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
+      const downloadResponse = await translatedBlobClient.download();
       
       const chunks: Buffer[] = [];
       for await (const chunk of downloadResponse.readableStreamBody!) {
@@ -1008,23 +998,26 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       }
       const translatedBuffer = Buffer.concat(chunks);
       
-      // Save to workspace
+      // Step 5: Save to workspace
       const translatedFilename = `translated-${targetLang}-${metadata.originalFilename}`;
-      const translatedBlobName = `${metadata.userId}/${documentId}/translated/${translatedFilename}`;
-      const workspaceBlobClient = containerClient.getBlockBlobClient(translatedBlobName);
+      const workspaceContainerClient = blobServiceClient.getContainerClient('workspace');
+      const translatedWorkspaceBlobName = `${metadata.userId}/${documentId}/translated/${translatedFilename}`;
+      const workspaceBlobClient = workspaceContainerClient.getBlockBlobClient(translatedWorkspaceBlobName);
+      
       await workspaceBlobClient.uploadData(translatedBuffer, {
         blobHTTPHeaders: { blobContentType: metadata.mimeType || 'application/pdf' }
       });
       
-      console.log(`[DOCUMENT_TRANSLATE] Saved to workspace: ${translatedBlobName}`);
+      console.log(`[DOCUMENT_TRANSLATE] Saved to workspace: ${translatedWorkspaceBlobName}`);
       
       result = {
         service: 'Azure Document Translation',
+        serviceDescription: 'Format-preserving batch document translation',
         targetLanguage: targetLang,
         originalFilename: metadata.originalFilename,
         translatedFilename,
         translatedDocumentUrl: `/api/workspace/${documentId}/translated/${translatedFilename}`,
-        message: `Document translated to ${targetLang}`
+        message: `Document translated to ${targetLang} with format preserved`
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'document-translate', result);
