@@ -35,6 +35,7 @@ interface UploadedFile {
 
 interface WorkspaceDocument {
   documentId: string
+  userId: string
   originalFilename: string
   mimeType: string
   uploadTime: string
@@ -717,97 +718,106 @@ function App() {
             {workspaceDocuments.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
                 <p style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>No documents yet</p>
-                <p style={{ fontSize: '0.9rem' }}>Upload documents in the "Upload & Process" tab to get started</p>
+                <p style={{ fontSize: '0.9rem' }}>Upload documents above to get started</p>
               </div>
             ) : (
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                gap: '1.5rem'
+              }}>
                 {workspaceDocuments.map(doc => (
                   <div 
                     key={doc.documentId}
                     style={{ 
                       background: 'white', 
-                      padding: '1.5rem', 
                       borderRadius: '8px',
                       border: '1px solid #e5e7eb',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                      overflow: 'hidden',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      transition: 'box-shadow 0.2s'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1rem' }}>
-                      <div style={{ flex: 1 }}>
-                        <h4 style={{ margin: '0 0 0.5rem 0', color: '#333', fontSize: '1.1rem' }}>
-                          📄 {doc.originalFilename}
-                        </h4>
-                        <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                          <div>Uploaded: {new Date(doc.uploadTime).toLocaleString()}</div>
-                          <div>Size: {(doc.fileSize / 1024).toFixed(1)} KB</div>
-                          <div>
-                            Malware Scan: 
-                            <span style={{ 
-                              marginLeft: '0.5rem',
-                              color: doc.malwareScanStatus === 'clean' ? '#10b981' : 
-                                     doc.malwareScanStatus === 'infected' ? '#ef4444' : '#f59e0b',
-                              fontWeight: '600'
-                            }}>
-                              {doc.malwareScanStatus === 'clean' && '✅ Clean'}
-                              {doc.malwareScanStatus === 'infected' && '⚠️ Infected'}
-                              {doc.malwareScanStatus === 'pending' && '⏳ Pending'}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '0.85rem', color: '#666', textAlign: 'right' }}>
-                        <div style={{ marginBottom: '0.5rem' }}>
-                          Processed: {doc.processedModes.length > 0 ? doc.processedModes.join(', ') : 'None'}
-                        </div>
-                      </div>
+                    {/* Thumbnail */}
+                    <div style={{ 
+                      width: '100%', 
+                      height: '200px', 
+                      background: '#f3f4f6',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      overflow: 'hidden'
+                    }}>
+                      {doc.mimeType === 'application/pdf' ? (
+                        <embed
+                          src={`${API_BASE_URL}/api/workspace/thumbnail/${doc.userId}/${doc.documentId}#toolbar=0&navpanes=0`}
+                          type="application/pdf"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            border: 'none'
+                          }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: '3rem' }}>📄</div>
+                      )}
                     </div>
                     
-                    {doc.processedModes.length > 0 && (
-                      <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb' }}>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                          {doc.processedModes.map(mode => (
-                            <button
-                              key={mode}
-                              onClick={async () => {
-                                try {
-                                  const response = await fetch(
-                                    `${API_BASE_URL}/api/workspace/${doc.documentId}/result/${mode}`,
-                                    { credentials: 'include' }
-                                  )
-                                  if (response.headers.get('content-type')?.includes('application/json')) {
-                                    const data = await response.json()
-                                    alert(JSON.stringify(data.result, null, 2))
-                                  } else {
-                                    // Binary file - download it
-                                    const blob = await response.blob()
-                                    const url = URL.createObjectURL(blob)
-                                    const a = document.createElement('a')
-                                    a.href = url
-                                    a.download = `${doc.originalFilename}-${mode}`
-                                    a.click()
-                                    URL.revokeObjectURL(url)
-                                  }
-                                } catch (err) {
-                                  alert('Failed to load result: ' + (err instanceof Error ? err.message : 'Unknown error'))
-                                }
-                              }}
-                              style={{
-                                background: '#667eea',
-                                color: 'white',
-                                border: 'none',
-                                padding: '0.5rem 1rem',
-                                borderRadius: '6px',
-                                cursor: 'pointer',
-                                fontSize: '0.9rem',
-                                fontWeight: '600'
-                              }}
-                            >
-                              📥 View {mode} result
-                            </button>
-                          ))}
+                    {/* Content */}
+                    <div style={{ padding: '1rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
+                      <h4 style={{ 
+                        margin: '0 0 0.5rem 0', 
+                        color: '#333', 
+                        fontSize: '0.95rem',
+                        fontWeight: '600',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {doc.originalFilename}
+                      </h4>
+                      <div style={{ fontSize: '0.75rem', color: '#666', flex: 1 }}>
+                        <div>{new Date(doc.uploadTime).toLocaleDateString()}</div>
+                        <div>{(doc.fileSize / 1024).toFixed(1)} KB</div>
+                        <div style={{ 
+                          marginTop: '0.5rem',
+                          color: doc.malwareScanStatus === 'clean' ? '#10b981' : 
+                                 doc.malwareScanStatus === 'infected' ? '#ef4444' : '#f59e0b'
+                        }}>
+                          {doc.malwareScanStatus === 'clean' && '✅'}
+                          {doc.malwareScanStatus === 'infected' && '⚠️'}
+                          {doc.malwareScanStatus === 'pending' && '⏳'}
                         </div>
                       </div>
-                    )}
+                      
+                      {doc.processedModes.length > 0 && (
+                        <div style={{ 
+                          marginTop: 'auto',
+                          paddingTop: '0.75rem', 
+                          borderTop: '1px solid #e5e7eb',
+                          fontSize: '0.7rem'
+                        }}>
+                          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                            {doc.processedModes.map(mode => (
+                              <span
+                                key={mode}
+                                style={{
+                                  padding: '0.125rem 0.5rem',
+                                  background: '#e0e7ff',
+                                  color: '#4f46e5',
+                                  borderRadius: '4px',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                {mode}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

@@ -14,6 +14,8 @@ import { OpenAI } from 'openai';
 import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
 import TextTranslationClient, { isUnexpected } from '@azure-rest/ai-translation-text';
 import DocumentTranslationClient, { isUnexpected as isUnexpectedDoc } from '@azure-rest/ai-translation-document';
+import { PDFDocument } from 'pdf-lib';
+import sharp from 'sharp';
 
 dotenv.config();
 
@@ -149,6 +151,7 @@ app.use((req, _res, next) => {
 // Workspace utility functions
 interface DocumentMetadata {
   documentId: string;
+  userId: string;
   originalFilename: string;
   mimeType: string;
   uploadTime: string;
@@ -157,6 +160,55 @@ interface DocumentMetadata {
   malwareScanTime?: string;
   processedModes: string[];
   lastAccessed: string;
+}
+
+// Generate thumbnail for PDF (first page, 200x200px)
+async function generateThumbnail(
+  userId: string,
+  documentId: string,
+  fileBuffer: Buffer,
+  mimeType: string
+): Promise<void> {
+  // Only generate thumbnails for PDFs
+  if (mimeType !== 'application/pdf') {
+    return;
+  }
+
+  try {
+    if (!blobServiceClient) throw new Error('Storage not configured');
+    
+    // Load PDF
+    const pdfDoc = await PDFDocument.load(fileBuffer);
+    const pages = pdfDoc.getPages();
+    
+    if (pages.length === 0) {
+      console.log('PDF has no pages, skipping thumbnail');
+      return;
+    }
+
+    // Extract first page as new PDF
+    const firstPageDoc = await PDFDocument.create();
+    const [copiedPage] = await firstPageDoc.copyPages(pdfDoc, [0]);
+    firstPageDoc.addPage(copiedPage);
+    
+    const firstPageBytes = await firstPageDoc.save();
+    
+    // For now, just save the first page PDF as thumbnail
+    // In production, you'd convert to image using pdf-to-png or similar
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const thumbnailBlobClient = containerClient.getBlockBlobClient(
+      `${userId}/${documentId}/thumbnail.pdf`
+    );
+    
+    await thumbnailBlobClient.upload(firstPageBytes, firstPageBytes.length, {
+      blobHTTPHeaders: { blobContentType: 'application/pdf' }
+    });
+    
+    console.log(`Thumbnail generated for document ${documentId}`);
+  } catch (error) {
+    console.error('Failed to generate thumbnail:', error);
+    // Don't fail the upload if thumbnail generation fails
+  }
 }
 
 async function saveToWorkspace(
@@ -181,6 +233,7 @@ async function saveToWorkspace(
   // Save metadata
   const metadata: DocumentMetadata = {
     documentId,
+    userId,
     originalFilename: filename,
     mimeType,
     uploadTime: new Date().toISOString(),
@@ -359,6 +412,11 @@ app.post('/api/workspace/upload', upload.single('file'), async (req: Request, re
       req.file.mimetype
     );
     
+    // Generate thumbnail (async, don't wait)
+    generateThumbnail(userId, documentId, req.file.buffer, req.file.mimetype).catch(err => {
+      console.error('Thumbnail generation failed:', err);
+    });
+    
     const metadata = await getDocumentMetadata(userId, documentId);
     
     res.json({
@@ -389,6 +447,40 @@ app.get('/api/workspace/documents', async (req: Request, res: Response) => {
     res.status(500).json({
       status: 'error',
       message: error instanceof Error ? error.message : 'Failed to list documents'
+    });
+  }
+});
+
+// Get document thumbnail
+app.get('/api/workspace/thumbnail/:userId/:documentId', async (req: Request, res: Response) => {
+  try {
+    const { userId, documentId } = req.params;
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const thumbnailBlobClient = containerClient.getBlockBlobClient(
+      `${userId}/${documentId}/thumbnail.pdf`
+    );
+    
+    const exists = await thumbnailBlobClient.exists();
+    if (!exists) {
+      return res.status(404).json({ status: 'error', message: 'Thumbnail not found' });
+    }
+    
+    const downloadResponse = await thumbnailBlobClient.download();
+    const content = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+    res.send(content);
+  } catch (error) {
+    console.error('Get thumbnail error:', error);
+    res.status(404).json({
+      status: 'error',
+      message: 'Thumbnail not available'
     });
   }
 });
