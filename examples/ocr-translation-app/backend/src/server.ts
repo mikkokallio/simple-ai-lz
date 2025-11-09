@@ -721,6 +721,67 @@ app.get('/api/workspace/:documentId/results', async (req: Request, res: Response
   }
 });
 
+// Get specific result for a document
+app.get('/api/workspace/:documentId/results/:mode', async (req: Request, res: Response) => {
+  try {
+    const userId = req.session.userId || 'demo';
+    const { documentId, mode } = req.params;
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const prefix = `${userId}/${documentId}/results/${mode}/`;
+    
+    // Find the result file (could be .json or .txt)
+    let resultBlob = null;
+    for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+      if (blob.name.startsWith(prefix)) {
+        resultBlob = blob;
+        break;
+      }
+    }
+    
+    if (!resultBlob) {
+      return res.status(404).json({ 
+        status: 'error', 
+        message: 'Result not found' 
+      });
+    }
+    
+    // Download the result
+    const blobClient = containerClient.getBlobClient(resultBlob.name);
+    const downloadResponse = await blobClient.download(0);
+    const content = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    // Parse based on content type
+    let result;
+    if (resultBlob.properties.contentType === 'application/json') {
+      result = JSON.parse(content.toString('utf-8'));
+    } else {
+      // Text format - wrap in object
+      result = { text: content.toString('utf-8') };
+    }
+    
+    res.json({
+      status: 'success',
+      result,
+      metadata: {
+        contentType: resultBlob.properties.contentType,
+        size: resultBlob.properties.contentLength,
+        lastModified: resultBlob.properties.lastModified
+      }
+    });
+  } catch (error) {
+    console.error('Get result error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to get result'
+    });
+  }
+});
+
 // Process document from workspace
 app.post('/api/workspace/:documentId/process', async (req: Request, res: Response) => {
   try {
