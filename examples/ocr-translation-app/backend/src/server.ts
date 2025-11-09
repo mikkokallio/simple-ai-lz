@@ -766,38 +766,24 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
         return res.status(500).json({ status: 'error', message: 'OpenAI not configured. Set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and AZURE_OPENAI_DEPLOYMENT environment variables.' });
       }
 
-      // Convert PDF to image for Vision API
-      let imageBuffer: Buffer;
-      let imageMimeType: string;
-      
-      if (metadata.mimeType === 'application/pdf') {
-        // Convert first page of PDF to PNG
-        const pdfDoc = await PDFDocument.load(fileBuffer);
-        const firstPage = pdfDoc.getPages()[0];
-        const { width, height } = firstPage.getSize();
-        
-        // Create a single-page PDF with just the first page
-        const singlePagePdf = await PDFDocument.create();
-        const [copiedPage] = await singlePagePdf.copyPages(pdfDoc, [0]);
-        singlePagePdf.addPage(copiedPage);
-        const singlePageBytes = await singlePagePdf.save();
-        
-        // Convert to PNG using sharp (via temporary conversion)
-        // Note: sharp can't directly handle PDF, so we'll use the PDF as-is
-        // and let the Vision API handle it, or error appropriately
-        imageBuffer = fileBuffer;
-        imageMimeType = 'application/pdf';
-        
-        console.log('[OCR_OPENAI] Processing PDF document (Vision API will process first page)');
-      } else if (metadata.mimeType?.startsWith('image/')) {
-        imageBuffer = fileBuffer;
-        imageMimeType = metadata.mimeType;
-      } else {
+      // Prepare image for Vision API (images only - no PDF support)
+      if (!metadata.mimeType?.startsWith('image/')) {
         return res.status(400).json({ 
           status: 'error', 
-          message: 'OpenAI Vision only supports PDF and image files (JPEG, PNG, GIF, WebP)' 
+          message: `OpenAI Vision OCR only supports image files.
+          
+Supported formats: JPEG, PNG, GIF, WebP
+
+For PDFs, please use:
+• OCR: Document Intelligence (best for forms and structured documents)
+• OCR: Content Understanding (extracts entities and key-value pairs)
+• Translate: Doc Intelligence + Text Translator (text-only translation)
+• Document Translation (preserves PDF formatting)` 
         });
       }
+      
+      const imageBuffer = fileBuffer;
+      const imageMimeType = metadata.mimeType;
 
       const base64Image = imageBuffer.toString('base64');
       const dataUrl = `data:${imageMimeType};base64,${base64Image}`;
@@ -813,17 +799,16 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
             ]
           }
         ],
-        max_tokens: 4096
+        max_completion_tokens: 4096
       });
 
       const extractedText = response.choices[0]?.message?.content || '';
       
       result = {
         service: 'OpenAI Vision (GPT-4o)',
-        serviceDescription: 'AI-powered OCR with flexible understanding',
+        serviceDescription: 'AI-powered OCR for images',
         model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
-        text: extractedText,
-        pageCount: metadata.mimeType === 'application/pdf' ? 1 : undefined
+        text: extractedText
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'ocr-openai', result);
@@ -869,30 +854,29 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       await saveResultToWorkspace(metadata.userId, documentId, 'translate', result);
       
     } else if (mode === 'translate-openai') {
-      // Tool 5: OpenAI Vision Translation (one-step)
+      // Tool 5: OpenAI Vision Translation (one-step, images only)
       if (!openaiClient) {
         return res.status(500).json({ status: 'error', message: 'OpenAI not configured. Set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and AZURE_OPENAI_DEPLOYMENT environment variables.' });
       }
 
       const targetLanguage = metadata.targetLanguage || 'English';
       
-      // Convert PDF to image for Vision API if needed
-      let imageBuffer: Buffer;
-      let imageMimeType: string;
-      
-      if (metadata.mimeType === 'application/pdf') {
-        imageBuffer = fileBuffer;
-        imageMimeType = 'application/pdf';
-        console.log('[TRANSLATE_OPENAI] Processing PDF document (Vision API will process first page)');
-      } else if (metadata.mimeType?.startsWith('image/')) {
-        imageBuffer = fileBuffer;
-        imageMimeType = metadata.mimeType;
-      } else {
+      // Vision API only supports images, not PDFs
+      if (!metadata.mimeType?.startsWith('image/')) {
         return res.status(400).json({ 
           status: 'error', 
-          message: 'OpenAI Vision Translation only supports PDF and image files (JPEG, PNG, GIF, WebP)' 
+          message: `OpenAI Vision Translation only supports image files.
+
+Supported formats: JPEG, PNG, GIF, WebP
+
+For PDFs, please use:
+• Translate: Doc Intelligence + Text Translator (text-only translation)
+• Document Translation (preserves PDF formatting - recommended for PDFs)` 
         });
       }
+      
+      const imageBuffer = fileBuffer;
+      const imageMimeType = metadata.mimeType;
       
       const base64Image = imageBuffer.toString('base64');
       const dataUrl = `data:${imageMimeType};base64,${base64Image}`;
@@ -908,18 +892,17 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
             ]
           }
         ],
-        max_tokens: 4096
+        max_completion_tokens: 4096
       });
 
       const translatedText = response.choices[0]?.message?.content || '';
       
       result = {
         service: 'OpenAI Vision Translation',
-        serviceDescription: 'One-step AI translation with context understanding',
+        serviceDescription: 'One-step AI translation for images',
         model: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o',
         translatedText,
-        targetLanguage,
-        pageCount: metadata.mimeType === 'application/pdf' ? 1 : undefined
+        targetLanguage
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'translate-openai', result);
