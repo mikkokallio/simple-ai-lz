@@ -11,7 +11,8 @@ declare global {
   }
 }
 
-const API_BASE_URL = window.ENV?.BACKEND_URL || import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'
+// Use backend URL from environment or default to localhost for development
+const API_BASE_URL = window.ENV?.BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:3000' : 'https://aca-ocr-trans-backend-ezle7syi.mangosmoke-47a72d95.swedencentral.azurecontainerapps.io')
 
 interface HealthStatus {
   status: string
@@ -66,7 +67,12 @@ function App() {
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`)
+        }
+        return res.json()
+      })
       .then(data => setHealth(data))
       .catch(err => setError(err.message))
     
@@ -79,9 +85,19 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/api/workspace/documents`, {
         credentials: 'include' // Include cookies for session
       })
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      
       const data = await response.json()
       if (data.status === 'success') {
-        setWorkspaceDocuments(data.documents)
+        // Ensure all documents have userId set to 'demo' (for backward compatibility)
+        const documentsWithUserId = data.documents.map((doc: WorkspaceDocument) => ({
+          ...doc,
+          userId: doc.userId || 'demo'
+        }))
+        setWorkspaceDocuments(documentsWithUserId)
       }
     } catch (err) {
       console.error('Failed to load workspace documents:', err)
@@ -145,6 +161,31 @@ function App() {
       await loadWorkspaceDocuments()
     } catch (error) {
       alert(`❌ Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
+  const deleteDocument = async (userId: string, documentId: string, filename: string) => {
+    if (!confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/workspace/${userId}/${documentId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Delete failed: ${response.statusText}`)
+      }
+      
+      await response.json()
+      alert(`✅ Document deleted successfully!`)
+      
+      // Reload workspace documents
+      await loadWorkspaceDocuments()
+    } catch (error) {
+      alert(`❌ Delete failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 
@@ -856,6 +897,31 @@ function App() {
                           🔄 Process Document
                         </button>
                       )}
+
+                      {/* Delete Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteDocument(doc.userId, doc.documentId, doc.originalFilename);
+                        }}
+                        style={{
+                          width: '100%',
+                          marginTop: '0.5rem',
+                          padding: '0.5rem',
+                          background: '#ef4444',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          transition: 'background 0.2s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
+                      >
+                        🗑️ Delete
+                      </button>
                       
                       {doc.processedModes.length > 0 && (
                         <div style={{ 

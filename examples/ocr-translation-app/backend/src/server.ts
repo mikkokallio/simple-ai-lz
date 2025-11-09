@@ -316,7 +316,14 @@ async function getDocumentMetadata(userId: string, documentId: string): Promise<
   try {
     const downloadResponse = await metadataBlobClient.download();
     const content = await streamToBuffer(downloadResponse.readableStreamBody!);
-    return JSON.parse(content.toString());
+    const metadata = JSON.parse(content.toString());
+    
+    // Ensure userId is present (for backward compatibility with old metadata)
+    if (!metadata.userId) {
+      metadata.userId = userId;
+    }
+    
+    return metadata;
   } catch (err) {
     return null;
   }
@@ -402,7 +409,7 @@ app.post('/api/workspace/upload', upload.single('file'), async (req: Request, re
     }
     
     const documentId = uuidv4();
-    const userId = req.session.userId!;
+    const userId = req.session.userId || 'demo';
     
     await saveToWorkspace(
       userId,
@@ -485,10 +492,88 @@ app.get('/api/workspace/thumbnail/:userId/:documentId', async (req: Request, res
   }
 });
 
+// Get original document file
+app.get('/api/workspace/:userId/:documentId/original/:filename', async (req: Request, res: Response) => {
+  try {
+    const { userId, documentId, filename } = req.params;
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({ status: 'error', message: 'Storage not configured' });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const blobClient = containerClient.getBlockBlobClient(
+      `${userId}/${documentId}/original/${filename}`
+    );
+    
+    const exists = await blobClient.exists();
+    if (!exists) {
+      return res.status(404).json({ status: 'error', message: 'Document not found' });
+    }
+    
+    const downloadResponse = await blobClient.download();
+    const content = await streamToBuffer(downloadResponse.readableStreamBody!);
+    
+    res.setHeader('Content-Type', downloadResponse.contentType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.send(content);
+  } catch (error) {
+    console.error('Get original file error:', error);
+    res.status(404).json({
+      status: 'error',
+      message: 'Document not available'
+    });
+  }
+});
+
+// Delete document and all associated files
+app.delete('/api/workspace/:userId/:documentId', async (req: Request, res: Response) => {
+  try {
+    const { userId, documentId } = req.params;
+    const containerName = 'workspace';
+    
+    if (!blobServiceClient) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Blob storage not available'
+      });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient(containerName);
+    
+    // List all blobs with this userId/documentId prefix
+    const prefix = `${userId}/${documentId}/`;
+    const blobs = containerClient.listBlobsFlat({ prefix });
+    
+    let deletedCount = 0;
+    for await (const blob of blobs) {
+      const blobClient = containerClient.getBlockBlobClient(blob.name);
+      await blobClient.delete();
+      deletedCount++;
+      console.log(`Deleted blob: ${blob.name}`);
+    }
+    
+    console.log(`Deleted ${deletedCount} blobs for document ${documentId}`);
+    
+    res.json({
+      status: 'success',
+      message: `Document deleted successfully`,
+      deletedFiles: deletedCount
+    });
+  } catch (error) {
+    console.error('Delete document error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete document'
+    });
+  }
+});
+
 // Get document metadata
 app.get('/api/workspace/:documentId', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId!;
+    const userId = req.session.userId || 'demo';
     const { documentId } = req.params;
     
     const metadata = await getDocumentMetadata(userId, documentId);
@@ -513,7 +598,7 @@ app.get('/api/workspace/:documentId', async (req: Request, res: Response) => {
 // Get document result
 app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId!;
+    const userId = req.session.userId || 'demo';
     const { documentId, mode } = req.params;
     
     if (!blobServiceClient) {
@@ -563,7 +648,7 @@ app.get('/api/workspace/:documentId/result/:mode', async (req: Request, res: Res
 // Process document from workspace
 app.post('/api/workspace/:documentId/process', async (req: Request, res: Response) => {
   try {
-    const userId = req.session.userId!;
+    const userId = req.session.userId || 'demo';
     const { documentId } = req.params;
     const { mode, targetLanguage } = req.body;
     
