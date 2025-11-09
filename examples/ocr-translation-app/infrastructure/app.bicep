@@ -49,6 +49,19 @@ param storageAccountName string = ''
 @description('Storage account resource ID for RBAC')
 param storageAccountResourceId string = ''
 
+@description('Azure OpenAI endpoint URL')
+param azureOpenAIEndpoint string = ''
+
+@description('Azure OpenAI API key')
+@secure()
+param azureOpenAIKey string = ''
+
+@description('Azure OpenAI deployment name')
+param azureOpenAIDeployment string = 'gpt-4o'
+
+@description('Azure OpenAI resource ID for RBAC')
+param azureOpenAIResourceId string = ''
+
 @description('Frontend container image')
 param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
@@ -102,6 +115,10 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
           name: 'ai-foundry-key'
           value: aiFoundryKey
         }
+        {
+          name: 'azure-openai-key'
+          value: azureOpenAIKey
+        }
       ]
       ingress: {
         external: true  // VNet-accessible (not public in internal environment)
@@ -151,6 +168,18 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'STORAGE_ACCOUNT_NAME'
               value: storageAccountName
+            }
+            {
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: azureOpenAIEndpoint
+            }
+            {
+              name: 'AZURE_OPENAI_API_KEY'
+              secretRef: 'azure-openai-key'
+            }
+            {
+              name: 'AZURE_OPENAI_DEPLOYMENT'
+              value: azureOpenAIDeployment
             }
           ]
         }
@@ -271,6 +300,11 @@ resource storageAccountService 'Microsoft.Storage/storageAccounts@2023-01-01' ex
   scope: resourceGroup(split(storageAccountResourceId, '/')[2], split(storageAccountResourceId, '/')[4])
 }
 
+resource azureOpenAIService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(azureOpenAIResourceId)) {
+  name: last(split(azureOpenAIResourceId, '/'))
+  scope: resourceGroup(split(azureOpenAIResourceId, '/')[2], split(azureOpenAIResourceId, '/')[4])
+}
+
 // RBAC to AI Foundry
 resource backendToAiFoundryRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(aiFoundryResourceId)) {
   name: guid(backendApp.id, aiFoundryResourceId, cognitiveServicesUserRoleId)
@@ -310,6 +344,17 @@ resource backendToStorageRbac 'Microsoft.Authorization/roleAssignments@2022-04-0
   scope: storageAccountService
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalId: backendApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// RBAC to Azure OpenAI
+resource backendToAzureOpenAIRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(azureOpenAIResourceId)) {
+  name: guid(backendApp.id, azureOpenAIResourceId, cognitiveServicesUserRoleId)
+  scope: azureOpenAIService
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
     principalId: backendApp.identity.principalId
     principalType: 'ServicePrincipal'
   }

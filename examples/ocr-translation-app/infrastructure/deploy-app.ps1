@@ -97,6 +97,39 @@ try {
     Write-Host "[INFO] AI Foundry not found - skipping" -ForegroundColor Gray
 }
 
+# Get Azure OpenAI details
+Write-Host "[INFO] Getting Azure OpenAI details..." -ForegroundColor Yellow
+try {
+    $azureOpenAIAccount = az cognitiveservices account list `
+        --query "[?kind=='OpenAI'] | [0]" -o json 2>$null | ConvertFrom-Json
+    
+    if ($azureOpenAIAccount) {
+        $azureOpenAIEndpoint = $azureOpenAIAccount.properties.endpoint
+        $azureOpenAIResourceId = $azureOpenAIAccount.id
+        $azureOpenAIName = $azureOpenAIAccount.name
+        $azureOpenAIRG = $azureOpenAIAccount.resourceGroup
+        
+        $azureOpenAIKey = az cognitiveservices account keys list `
+            --name $azureOpenAIName `
+            --resource-group $azureOpenAIRG `
+            --query key1 -o tsv 2>$null
+        
+        # Get deployment name (first GPT deployment)
+        $azureOpenAIDeployment = az cognitiveservices account deployment list `
+            --name $azureOpenAIName `
+            --resource-group $azureOpenAIRG `
+            --query "[?properties.model.name contains(@, 'gpt')].name | [0]" -o tsv 2>$null
+        
+        if (-not $azureOpenAIDeployment) {
+            $azureOpenAIDeployment = "gpt-4o"  # Default fallback
+        }
+        
+        Write-Host "[OK] Found Azure OpenAI: $azureOpenAIName (Deployment: $azureOpenAIDeployment)" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "[INFO] Azure OpenAI not found - skipping" -ForegroundColor Gray
+}
+
 # Container images
 $frontendImage = "$acrName.azurecr.io/ocr-translation-frontend:$FrontendImageTag"
 $backendImage = "$acrName.azurecr.io/ocr-translation-backend:$BackendImageTag"
@@ -126,6 +159,10 @@ az deployment group create `
     --parameters documentTranslatorResourceId=$translatorResourceId `
     --parameters storageAccountName=$storageAccountName `
     --parameters storageAccountResourceId=$storageAccountResourceId `
+    --parameters azureOpenAIEndpoint=$azureOpenAIEndpoint `
+    --parameters azureOpenAIKey=$azureOpenAIKey `
+    --parameters azureOpenAIDeployment=$azureOpenAIDeployment `
+    --parameters azureOpenAIResourceId=$azureOpenAIResourceId `
     --parameters frontendImage=$frontendImage `
     --parameters backendImage=$backendImage
 
