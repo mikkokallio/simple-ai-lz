@@ -208,7 +208,7 @@ async function loadPreferences(userId: string): Promise<UserPreferences> {
       temperature: 1,
       maxTokens: 2000,
       systemPrompt: 'You are a helpful AI assistant.',
-      enabledTools: ['regex_execute']
+      enabledTools: ['regex_execute', 'calculate']
     };
   }
 }
@@ -254,6 +254,23 @@ const AVAILABLE_TOOLS = {
         required: ['pattern', 'text']
       }
     }
+  },
+  calculate: {
+    type: 'function' as const,
+    function: {
+      name: 'calculate',
+      description: 'Perform mathematical calculations and evaluate mathematical expressions. Supports arithmetic operations (+, -, *, /), exponentiation (**), modulo (%), parentheses, and common math functions (sqrt, sin, cos, tan, log, etc.). Use this for any mathematical computation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          expression: {
+            type: 'string',
+            description: 'The mathematical expression to evaluate. Examples: "2 + 2", "sqrt(16)", "sin(3.14159/2)", "(5 + 3) * 2". Supports: +, -, *, /, **, %, sqrt, abs, sin, cos, tan, log, ln, exp, floor, ceil, round, min, max, PI, E.'
+          }
+        },
+        required: ['expression']
+      }
+    }
   }
 };
 
@@ -295,6 +312,65 @@ async function executeRegex(pattern: string, text: string, flags: string = 'g'):
   } catch (error: any) {
     return JSON.stringify({
       success: false,
+      error: error.message
+    }, null, 2);
+  }
+}
+
+async function calculate(expression: string): Promise<string> {
+  try {
+    // Security: sanitize and validate the expression
+    // Only allow numbers, operators, whitespace, parentheses, and known math functions
+    const allowedPattern = /^[\d\s+\-*/.()%,]+|sqrt|abs|sin|cos|tan|log|ln|exp|floor|ceil|round|min|max|PI|E|\*\*$/;
+    const sanitized = expression
+      .replace(/\s+/g, '') // Remove whitespace for checking
+      .replace(/PI/g, Math.PI.toString())
+      .replace(/E(?![a-z])/g, Math.E.toString());
+    
+    // Replace math functions with Math. equivalents
+    let evalExpression = expression
+      .replace(/PI/g, Math.PI.toString())
+      .replace(/E(?![a-z])/g, Math.E.toString())
+      .replace(/sqrt\(/g, 'Math.sqrt(')
+      .replace(/abs\(/g, 'Math.abs(')
+      .replace(/sin\(/g, 'Math.sin(')
+      .replace(/cos\(/g, 'Math.cos(')
+      .replace(/tan\(/g, 'Math.tan(')
+      .replace(/log\(/g, 'Math.log10(')
+      .replace(/ln\(/g, 'Math.log(')
+      .replace(/exp\(/g, 'Math.exp(')
+      .replace(/floor\(/g, 'Math.floor(')
+      .replace(/ceil\(/g, 'Math.ceil(')
+      .replace(/round\(/g, 'Math.round(')
+      .replace(/min\(/g, 'Math.min(')
+      .replace(/max\(/g, 'Math.max(')
+      .replace(/\*\*/g, '**'); // Exponentiation
+
+    // Validate no dangerous patterns (no letters except in Math. calls)
+    const dangerousPattern = /[a-zA-Z]+/g;
+    const words = evalExpression.match(dangerousPattern) || [];
+    const safeWords = words.every(word => word === 'Math');
+    
+    if (!safeWords) {
+      throw new Error('Expression contains invalid characters or functions');
+    }
+
+    // Evaluate the expression
+    const result = eval(evalExpression);
+    
+    if (typeof result !== 'number' || !isFinite(result)) {
+      throw new Error('Calculation resulted in an invalid number');
+    }
+
+    return JSON.stringify({
+      success: true,
+      expression: expression,
+      result: result
+    }, null, 2);
+  } catch (error: any) {
+    return JSON.stringify({
+      success: false,
+      expression: expression,
       error: error.message
     }, null, 2);
   }
@@ -462,7 +538,7 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
     ];
     
     // Prepare tools based on enabled preferences
-    const enabledTools = preferences.enabledTools || ['regex_execute']; // Default if undefined
+    const enabledTools = preferences.enabledTools || ['regex_execute', 'calculate']; // Default if undefined
     const tools = enabledTools
       .map(toolName => AVAILABLE_TOOLS[toolName as keyof typeof AVAILABLE_TOOLS])
       .filter(tool => tool !== undefined);
@@ -574,6 +650,16 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
                 type: 'tool_result',
                 toolName: functionName,
                 preview: `Regex matched ${JSON.parse(functionResult).matchCount || 0} times`
+              })}\n\n`);
+            } else if (functionName === 'calculate') {
+              functionResult = await calculate(functionArgs.expression);
+              
+              const resultData = JSON.parse(functionResult);
+              // Send tool execution notification
+              res.write(`data: ${JSON.stringify({ 
+                type: 'tool_result',
+                toolName: functionName,
+                preview: resultData.success ? `Result: ${resultData.result}` : `Error: ${resultData.error}`
               })}\n\n`);
             }
             

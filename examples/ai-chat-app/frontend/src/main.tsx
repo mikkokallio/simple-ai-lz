@@ -134,7 +134,7 @@ async function fetchPreferences(): Promise<UserPreferences> {
   const prefs = await response.json();
   // Ensure enabledTools exists for backward compatibility
   if (!prefs.enabledTools) {
-    prefs.enabledTools = ['regex_execute'];
+    prefs.enabledTools = ['regex_execute', 'calculate'];
   }
   return prefs;
 }
@@ -173,7 +173,7 @@ function App() {
     temperature: 1,
     maxTokens: 2000,
     systemPrompt: 'You are a helpful AI assistant.',
-    enabledTools: ['regex_execute']
+    enabledTools: ['regex_execute', 'calculate']
   });
   const [editedPreferences, setEditedPreferences] = useState<UserPreferences>(preferences);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
@@ -900,6 +900,27 @@ function App() {
                   </span>
                   <span style={styles.toolDescription}>
                     AI can run regular expressions for pattern matching and text extraction
+                  </span>
+                </label>
+                
+                <label style={styles.toolItem}>
+                  <input
+                    type="checkbox"
+                    checked={(editedPreferences.enabledTools || []).includes('calculate')}
+                    onChange={(e) => {
+                      const currentTools = editedPreferences.enabledTools || [];
+                      const tools = e.target.checked
+                        ? [...currentTools, 'calculate']
+                        : currentTools.filter(t => t !== 'calculate');
+                      setEditedPreferences({ ...editedPreferences, enabledTools: tools });
+                    }}
+                    style={styles.checkbox}
+                  />
+                  <span style={styles.toolName}>
+                    Calculator
+                  </span>
+                  <span style={styles.toolDescription}>
+                    AI can perform mathematical calculations and evaluate expressions
                   </span>
                 </label>
               </div>
