@@ -131,7 +131,12 @@ async function sendMessage(
 async function fetchPreferences(): Promise<UserPreferences> {
   const response = await fetch(`${API_BASE_URL}/api/preferences`);
   if (!response.ok) throw new Error('Failed to fetch preferences');
-  return response.json();
+  const prefs = await response.json();
+  // Ensure enabledTools exists for backward compatibility
+  if (!prefs.enabledTools) {
+    prefs.enabledTools = ['regex_execute'];
+  }
+  return prefs;
 }
 
 async function updatePreferences(preferences: UserPreferences): Promise<UserPreferences> {
@@ -880,11 +885,12 @@ function App() {
                 <label style={styles.toolItem}>
                   <input
                     type="checkbox"
-                    checked={editedPreferences.enabledTools.includes('regex_execute')}
+                    checked={(editedPreferences.enabledTools || []).includes('regex_execute')}
                     onChange={(e) => {
+                      const currentTools = editedPreferences.enabledTools || [];
                       const tools = e.target.checked
-                        ? [...editedPreferences.enabledTools, 'regex_execute']
-                        : editedPreferences.enabledTools.filter(t => t !== 'regex_execute');
+                        ? [...currentTools, 'regex_execute']
+                        : currentTools.filter(t => t !== 'regex_execute');
                       setEditedPreferences({ ...editedPreferences, enabledTools: tools });
                     }}
                     style={styles.checkbox}

@@ -462,7 +462,8 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
     ];
     
     // Prepare tools based on enabled preferences
-    const tools = preferences.enabledTools
+    const enabledTools = preferences.enabledTools || ['regex_execute']; // Default if undefined
+    const tools = enabledTools
       .map(toolName => AVAILABLE_TOOLS[toolName as keyof typeof AVAILABLE_TOOLS])
       .filter(tool => tool !== undefined);
     
