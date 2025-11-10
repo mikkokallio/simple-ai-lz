@@ -18,12 +18,18 @@ interface Message {
   timestamp: string;
 }
 
+interface MCPServer {
+  id: string;
+  name: string;
+}
+
 interface UserPreferences {
   model: string;
   temperature: number;
   maxTokens: number;
   systemPrompt: string;
   enabledTools: string[];
+  enabledMcpServers: string[];
 }
 
 // API configuration - direct backend URL (no nginx proxy)
@@ -149,6 +155,12 @@ async function updatePreferences(preferences: UserPreferences): Promise<UserPref
   return response.json();
 }
 
+async function fetchMcpServers(): Promise<MCPServer[]> {
+  const response = await fetch(`${API_BASE_URL}/api/mcp-servers`);
+  if (!response.ok) throw new Error('Failed to fetch MCP servers');
+  return response.json();
+}
+
 async function updateThreadTitle(threadId: string, title: string): Promise<Thread> {
   const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
     method: 'PATCH',
@@ -173,11 +185,13 @@ function App() {
     temperature: 1,
     maxTokens: 2000,
     systemPrompt: 'You are a helpful AI assistant.',
-    enabledTools: ['regex_execute', 'calculate']
+    enabledTools: ['regex_execute', 'calculate'],
+    enabledMcpServers: []
   });
   const [editedPreferences, setEditedPreferences] = useState<UserPreferences>(preferences);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingThreadTitle, setEditingThreadTitle] = useState('');
+  const [availableMcpServers, setAvailableMcpServers] = useState<MCPServer[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -185,6 +199,7 @@ function App() {
   useEffect(() => {
     loadThreads();
     loadPreferences();
+    loadMcpServers();
   }, []);
 
   // Load messages when thread changes
@@ -222,10 +237,23 @@ function App() {
   async function loadPreferences() {
     try {
       const data = await fetchPreferences();
+      // Backward compatibility: ensure enabledMcpServers exists
+      if (!data.enabledMcpServers) {
+        data.enabledMcpServers = [];
+      }
       setPreferences(data);
       setEditedPreferences(data);
     } catch (error) {
       console.error('Error loading preferences:', error);
+    }
+  }
+
+  async function loadMcpServers() {
+    try {
+      const servers = await fetchMcpServers();
+      setAvailableMcpServers(servers);
+    } catch (error) {
+      console.error('Error loading MCP servers:', error);
     }
   }
 
@@ -925,6 +953,37 @@ function App() {
                 </label>
               </div>
             </div>
+
+            {/* MCP Servers Section */}
+            {availableMcpServers.length > 0 && (
+              <div style={styles.formGroup}>
+                <label style={styles.label}>MCP Servers</label>
+                <div style={styles.toolsList}>
+                  {availableMcpServers.map(server => (
+                    <label key={server.id} style={styles.toolItem}>
+                      <input
+                        type="checkbox"
+                        checked={(editedPreferences.enabledMcpServers || []).includes(server.id)}
+                        onChange={(e) => {
+                          const currentServers = editedPreferences.enabledMcpServers || [];
+                          const servers = e.target.checked
+                            ? [...currentServers, server.id]
+                            : currentServers.filter(s => s !== server.id);
+                          setEditedPreferences({ ...editedPreferences, enabledMcpServers: servers });
+                        }}
+                        style={styles.checkbox}
+                      />
+                      <span style={styles.toolName}>
+                        {server.name}
+                      </span>
+                      <span style={styles.toolDescription}>
+                        AI can use this external service for additional capabilities
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={styles.modalButtons}>
               <button style={styles.saveButton} onClick={handleSavePreferences}>

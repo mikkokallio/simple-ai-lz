@@ -25,12 +25,21 @@ interface Message {
   timestamp: string;
 }
 
+interface MCPServer {
+  id: string;
+  name: string;
+  url: string;
+  headerName: string;
+  apiKey: string;
+}
+
 interface UserPreferences {
   model: string;
   temperature: number;
   maxTokens: number;
   systemPrompt: string;
   enabledTools: string[];
+  enabledMcpServers: string[];
 }
 
 // Environment variables
@@ -42,6 +51,22 @@ const AI_FOUNDRY_ENDPOINT = process.env.AI_FOUNDRY_ENDPOINT || '';
 const AI_FOUNDRY_DEPLOYMENT = process.env.AI_FOUNDRY_DEPLOYMENT_NAME || 'gpt-5-mini';
 const AI_FOUNDRY_KEY = process.env.AI_FOUNDRY_KEY || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-secret-change-me';
+
+// Parse MCP servers from environment variable
+const MCP_SERVERS_CONFIG = process.env['mcp-servers-config'] || '{"mcp_servers":[]}';
+let MCP_SERVERS: MCPServer[] = [];
+try {
+  const parsed = JSON.parse(MCP_SERVERS_CONFIG);
+  MCP_SERVERS = (parsed.mcp_servers || []).map((server: any) => ({
+    id: server.id || '',
+    name: server.name || '',
+    url: server.url || '',
+    headerName: server.headerName || '',
+    apiKey: server.apiKey || ''
+  })).filter((server: MCPServer) => server.id && server.url);
+} catch (error) {
+  console.error('Failed to parse mcp-servers-config:', error);
+}
 
 // Static user ID (like in OCR app)
 const STATIC_USER_ID = 'demo';
@@ -208,7 +233,8 @@ async function loadPreferences(userId: string): Promise<UserPreferences> {
       temperature: 1,
       maxTokens: 2000,
       systemPrompt: 'You are a helpful AI assistant.',
-      enabledTools: ['regex_execute', 'calculate']
+      enabledTools: ['regex_execute', 'calculate'],
+      enabledMcpServers: []
     };
   }
 }
@@ -543,6 +569,20 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
       .map(toolName => AVAILABLE_TOOLS[toolName as keyof typeof AVAILABLE_TOOLS])
       .filter(tool => tool !== undefined);
     
+    // Prepare MCP servers based on enabled preferences
+    const enabledMcpServerIds = preferences.enabledMcpServers || [];
+    const mcpServers = MCP_SERVERS
+      .filter(server => enabledMcpServerIds.includes(server.id))
+      .map(server => {
+        const mcpServer: any = { url: server.url };
+        if (server.apiKey && server.headerName) {
+          mcpServer.headers = {
+            [server.headerName]: server.apiKey
+          };
+        }
+        return mcpServer;
+      });
+    
     // Set response headers for streaming
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -566,7 +606,7 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
         // Note: gpt-5-mini and o1 models only support temperature=1 (default)
         const isReasoningModel = preferences.model.includes('gpt-5') || preferences.model.includes('o1');
         
-        const stream = await openaiClient.chat.completions.create({
+        const completionParams: any = {
           model: preferences.model,
           messages: openaiMessages,
           max_completion_tokens: preferences.maxTokens,
@@ -574,7 +614,14 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
           tools: tools.length > 0 ? tools : undefined,
           tool_choice: tools.length > 0 ? 'auto' : undefined,
           stream: true
-        });
+        };
+        
+        // Add MCP servers if any are enabled
+        if (mcpServers.length > 0) {
+          completionParams.mcp_servers = mcpServers;
+        }
+        
+        const stream: any = await openaiClient.chat.completions.create(completionParams);
         
         let currentContent = '';
         let toolCalls: any[] = [];
@@ -756,6 +803,21 @@ app.put('/api/preferences', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error saving preferences:', error);
     res.status(500).json({ error: 'Failed to save preferences' });
+  }
+});
+
+// Get available MCP servers
+app.get('/api/mcp-servers', async (req: Request, res: Response) => {
+  try {
+    // Return list of available MCP servers (configured by admin)
+    const mcpServers = MCP_SERVERS.map(server => ({
+      id: server.id,
+      name: server.name
+    }));
+    res.json(mcpServers);
+  } catch (error) {
+    console.error('Error getting MCP servers:', error);
+    res.status(500).json({ error: 'Failed to get MCP servers' });
   }
 });
 
