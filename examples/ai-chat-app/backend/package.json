@@ -1,0 +1,36 @@
+{
+  "name": "ai-chat-backend",
+  "version": "1.0.0",
+  "description": "Backend for AI Chat Application",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": ["azure", "openai", "chat", "ai"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/storage-blob": "^12.25.0",
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "helmet": "^8.0.0",
+    "morgan": "^1.10.0",
+    "express-session": "^1.18.1",
+    "openai": "^4.75.0",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/cors": "^2.8.17",
+    "@types/morgan": "^1.9.9",
+    "@types/express-session": "^1.18.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.7.2",
+    "ts-node": "^10.9.2"
+  }
+}

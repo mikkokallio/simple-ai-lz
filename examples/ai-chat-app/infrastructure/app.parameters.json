@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerAppsEnvironmentId": {
+      "value": ""
+    },
+    "appInsightsConnectionString": {
+      "value": ""
+    },
+    "location": {
+      "value": "swedencentral"
+    },
+    "uniqueSuffix": {
+      "value": "ezle7syi"
+    },
+    "acrPassword": {
+      "value": ""
+    },
+    "storageAccountName": {
+      "value": ""
+    },
+    "storageAccountResourceId": {
+      "value": ""
+    },
+    "aiFoundryEndpoint": {
+      "value": "https://foundry-mikkolabs.cognitiveservices.azure.com/"
+    },
+    "aiFoundryDeployment": {
+      "value": "gpt-5-mini"
+    },
+    "keyVaultName": {
+      "value": "kv-ailz-ezle7syi"
+    },
+    "aiFoundryKeySecretName": {
+      "value": "ai-foundry-key"
+    },
+    "frontendImage": {
+      "value": "acrezle7syiailz.azurecr.io/ai-chat-frontend:v1"
+    },
+    "backendImage": {
+      "value": "acrezle7syiailz.azurecr.io/ai-chat-backend:v2"
+    }
+  }
+}

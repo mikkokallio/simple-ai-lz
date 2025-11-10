@@ -1,0 +1,75 @@
+name: Deploy AI Chat App to Azure
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'examples/ai-chat-app/**'
+  workflow_dispatch:
+
+env:
+  AZURE_RESOURCE_GROUP: rg-ai-chat
+  AZURE_ACR_NAME: acraichat
+  BACKEND_IMAGE: ai-chat-backend
+  FRONTEND_IMAGE: ai-chat-frontend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Log in to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Log in to Azure Container Registry
+      run: |
+        az acr login --name ${{ env.AZURE_ACR_NAME }}
+    
+    - name: Build and push backend image
+      working-directory: examples/ai-chat-app/backend
+      run: |
+        docker build -t ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE }}:${{ github.sha }} .
+        docker push ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+        docker tag ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE }}:${{ github.sha }} \
+                   ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE }}:latest
+        docker push ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE }}:latest
+    
+    - name: Build and push frontend image
+      working-directory: examples/ai-chat-app/frontend
+      run: |
+        docker build -t ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} .
+        docker push ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+        docker tag ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} \
+                   ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.FRONTEND_IMAGE }}:latest
+        docker push ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.FRONTEND_IMAGE }}:latest
+    
+    - name: Deploy backend to Container Apps
+      run: |
+        az containerapp update \
+          --name ai-chat-backend \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --image ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+    
+    - name: Deploy frontend to Container Apps
+      run: |
+        az containerapp update \
+          --name ai-chat-frontend \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --image ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+    
+    - name: Get application URLs
+      run: |
+        echo "Backend URL:"
+        az containerapp show --name ai-chat-backend \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn -o tsv
+        
+        echo "Frontend URL:"
+        az containerapp show --name ai-chat-frontend \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn -o tsv
