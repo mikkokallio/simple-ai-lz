@@ -136,6 +136,16 @@ async function updatePreferences(preferences: UserPreferences): Promise<UserPref
   return response.json();
 }
 
+async function updateThreadTitle(threadId: string, title: string): Promise<Thread> {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title })
+  });
+  if (!response.ok) throw new Error('Failed to update thread title');
+  return response.json();
+}
+
 // Main App Component
 function App() {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -152,6 +162,8 @@ function App() {
     systemPrompt: 'You are a helpful AI assistant.'
   });
   const [editedPreferences, setEditedPreferences] = useState<UserPreferences>(preferences);
+  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
+  const [editingThreadTitle, setEditingThreadTitle] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -225,6 +237,34 @@ function App() {
     } catch (error) {
       console.error('Error deleting thread:', error);
     }
+  }
+
+  async function handleUpdateThreadTitle(threadId: string, newTitle: string) {
+    if (!newTitle.trim()) {
+      setEditingThreadId(null);
+      setEditingThreadTitle('');
+      return;
+    }
+
+    try {
+      const updatedThread = await updateThreadTitle(threadId, newTitle.trim());
+      setThreads(threads.map(t => t.threadId === threadId ? updatedThread : t));
+      setEditingThreadId(null);
+      setEditingThreadTitle('');
+    } catch (error) {
+      console.error('Error updating thread title:', error);
+      alert('Failed to update thread title');
+    }
+  }
+
+  function handleStartEditingTitle(thread: Thread) {
+    setEditingThreadId(thread.threadId);
+    setEditingThreadTitle(thread.title);
+  }
+
+  function handleCancelEditingTitle() {
+    setEditingThreadId(null);
+    setEditingThreadTitle('');
   }
 
   async function handleSendMessage() {
@@ -376,6 +416,16 @@ function App() {
       whiteSpace: 'nowrap',
       flex: 1,
       textAlign: 'left'
+    } as React.CSSProperties,
+    threadTitleInput: {
+      fontSize: '14px',
+      color: '#ececf1',
+      background: '#2a2b32',
+      border: '1px solid #565869',
+      borderRadius: '4px',
+      padding: '4px 8px',
+      flex: 1,
+      outline: 'none'
     } as React.CSSProperties,
     deleteButton: {
       padding: '6px 12px',
@@ -620,9 +670,41 @@ function App() {
                 ...styles.threadItem,
                 ...(currentThreadId === thread.threadId ? styles.threadItemActive : {})
               }}
-              onClick={() => setCurrentThreadId(thread.threadId)}
+              onClick={() => {
+                if (editingThreadId !== thread.threadId) {
+                  setCurrentThreadId(thread.threadId);
+                }
+              }}
             >
-              <div style={styles.threadTitle}>{thread.title}</div>
+              {editingThreadId === thread.threadId ? (
+                <input
+                  style={styles.threadTitleInput}
+                  type="text"
+                  value={editingThreadTitle}
+                  onChange={(e) => setEditingThreadTitle(e.target.value)}
+                  onBlur={() => handleUpdateThreadTitle(thread.threadId, editingThreadTitle)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      handleUpdateThreadTitle(thread.threadId, editingThreadTitle);
+                    } else if (e.key === 'Escape') {
+                      handleCancelEditingTitle();
+                    }
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  autoFocus
+                />
+              ) : (
+                <div 
+                  style={styles.threadTitle}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    handleStartEditingTitle(thread);
+                  }}
+                  title="Double-click to edit"
+                >
+                  {thread.title}
+                </div>
+              )}
               <button
                 style={styles.deleteButton}
                 onClick={(e) => {

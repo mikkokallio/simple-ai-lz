@@ -309,6 +309,32 @@ app.delete('/api/threads/:threadId', async (req: Request, res: Response) => {
   }
 });
 
+// Update thread title
+app.patch('/api/threads/:threadId', async (req: Request, res: Response) => {
+  try {
+    const { threadId } = req.params;
+    const { title } = req.body;
+    
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({ error: 'Valid title is required' });
+    }
+    
+    const thread = await loadThread(STATIC_USER_ID, threadId);
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    
+    thread.title = title.trim();
+    thread.updatedAt = new Date().toISOString();
+    await saveThread(STATIC_USER_ID, thread);
+    
+    res.json(thread);
+  } catch (error) {
+    console.error('Error updating thread:', error);
+    res.status(500).json({ error: 'Failed to update thread' });
+  }
+});
+
 // Get messages for a thread
 app.get('/api/threads/:threadId/messages', async (req: Request, res: Response) => {
   try {
