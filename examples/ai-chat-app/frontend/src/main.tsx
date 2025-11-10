@@ -23,6 +23,7 @@ interface UserPreferences {
   temperature: number;
   maxTokens: number;
   systemPrompt: string;
+  enabledTools: string[];
 }
 
 // API configuration - direct backend URL (no nginx proxy)
@@ -107,6 +108,13 @@ async function sendMessage(
 
           if (data.type === 'delta' && data.content) {
             onChunk(data.content);
+          } else if (data.type === 'tool_calls') {
+            // AI is calling tools - show notification
+            const toolNames = data.toolCalls.map((tc: any) => tc.name).join(', ');
+            onChunk(`\n\n🔧 *Using tools: ${toolNames}*\n\n`);
+          } else if (data.type === 'tool_result') {
+            // Tool execution result
+            onChunk(`\n📊 *${data.toolName}: ${data.preview}*\n\n`);
           } else if (data.type === 'done' && data.thread) {
             onComplete(data.thread);
           } else if (data.type === 'error') {
@@ -159,7 +167,8 @@ function App() {
     model: 'gpt-4o',
     temperature: 1,
     maxTokens: 2000,
-    systemPrompt: 'You are a helpful AI assistant.'
+    systemPrompt: 'You are a helpful AI assistant.',
+    enabledTools: ['regex_execute']
   });
   const [editedPreferences, setEditedPreferences] = useState<UserPreferences>(preferences);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
@@ -647,6 +656,43 @@ function App() {
     cancelButtonHover: {
       background: '#f3f4f6',
       borderColor: '#9ca3af'
+    } as React.CSSProperties,
+    toolsList: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
+      marginTop: '8px'
+    } as React.CSSProperties,
+    toolItem: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '12px',
+      padding: '12px',
+      background: '#1e1e1e',
+      border: '1px solid #2d2d2d',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      transition: 'all 0.2s'
+    } as React.CSSProperties,
+    checkbox: {
+      width: '18px',
+      height: '18px',
+      cursor: 'pointer',
+      marginTop: '2px',
+      accentColor: '#0078d4'
+    } as React.CSSProperties,
+    toolName: {
+      fontWeight: '600',
+      color: '#e5e7eb',
+      fontSize: '15px',
+      marginBottom: '4px',
+      display: 'block'
+    } as React.CSSProperties,
+    toolDescription: {
+      fontSize: '13px',
+      color: '#9ca3af',
+      lineHeight: '1.5',
+      display: 'block'
     } as React.CSSProperties
   };
 
@@ -826,6 +872,31 @@ function App() {
                 value={editedPreferences.systemPrompt}
                 onChange={(e) => setEditedPreferences({ ...editedPreferences, systemPrompt: e.target.value })}
               />
+            </div>
+
+            <div style={styles.formGroup}>
+              <label style={styles.label}>Enabled Tools</label>
+              <div style={styles.toolsList}>
+                <label style={styles.toolItem}>
+                  <input
+                    type="checkbox"
+                    checked={editedPreferences.enabledTools.includes('regex_execute')}
+                    onChange={(e) => {
+                      const tools = e.target.checked
+                        ? [...editedPreferences.enabledTools, 'regex_execute']
+                        : editedPreferences.enabledTools.filter(t => t !== 'regex_execute');
+                      setEditedPreferences({ ...editedPreferences, enabledTools: tools });
+                    }}
+                    style={styles.checkbox}
+                  />
+                  <span style={styles.toolName}>
+                    Regex Execute
+                  </span>
+                  <span style={styles.toolDescription}>
+                    AI can run regular expressions for pattern matching and text extraction
+                  </span>
+                </label>
+              </div>
             </div>
 
             <div style={styles.modalButtons}>

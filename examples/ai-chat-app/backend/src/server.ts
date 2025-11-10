@@ -30,6 +30,7 @@ interface UserPreferences {
   temperature: number;
   maxTokens: number;
   systemPrompt: string;
+  enabledTools: string[];
 }
 
 // Environment variables
@@ -206,7 +207,8 @@ async function loadPreferences(userId: string): Promise<UserPreferences> {
       model: 'gpt-4o',
       temperature: 1,
       maxTokens: 2000,
-      systemPrompt: 'You are a helpful AI assistant.'
+      systemPrompt: 'You are a helpful AI assistant.',
+      enabledTools: ['regex_execute']
     };
   }
 }
@@ -223,6 +225,79 @@ async function streamToString(readableStream: NodeJS.ReadableStream): Promise<st
     });
     readableStream.on('error', reject);
   });
+}
+
+// Function tool definitions
+const AVAILABLE_TOOLS = {
+  regex_execute: {
+    type: 'function' as const,
+    function: {
+      name: 'regex_execute',
+      description: 'Execute a regular expression pattern against text. Useful for pattern matching, text extraction, validation, and text analysis. Returns all matches with their positions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'The regular expression pattern to match (without delimiters). Example: "\\d{3}-\\d{4}" for phone numbers.'
+          },
+          text: {
+            type: 'string',
+            description: 'The text to search within.'
+          },
+          flags: {
+            type: 'string',
+            description: 'Regex flags: g (global), i (case-insensitive), m (multiline), s (dotall). Default: "g"',
+            enum: ['', 'g', 'i', 'm', 's', 'gi', 'gm', 'gs', 'im', 'is', 'ms', 'gim', 'gis', 'gms', 'ims', 'gims']
+          }
+        },
+        required: ['pattern', 'text']
+      }
+    }
+  }
+};
+
+// Function tool handlers
+async function executeRegex(pattern: string, text: string, flags: string = 'g'): Promise<string> {
+  try {
+    const regex = new RegExp(pattern, flags);
+    const matches: any[] = [];
+    
+    if (flags.includes('g')) {
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        matches.push({
+          match: match[0],
+          index: match.index,
+          groups: match.slice(1)
+        });
+        // Prevent infinite loop on zero-length matches
+        if (match.index === regex.lastIndex) {
+          regex.lastIndex++;
+        }
+      }
+    } else {
+      const match = regex.exec(text);
+      if (match) {
+        matches.push({
+          match: match[0],
+          index: match.index,
+          groups: match.slice(1)
+        });
+      }
+    }
+    
+    return JSON.stringify({
+      success: true,
+      matchCount: matches.length,
+      matches: matches
+    }, null, 2);
+  } catch (error: any) {
+    return JSON.stringify({
+      success: false,
+      error: error.message
+    }, null, 2);
+  }
 }
 
 // Express app setup
@@ -380,11 +455,16 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
     await saveMessage(STATIC_USER_ID, userMessage);
     
     // Prepare messages for OpenAI (add system prompt)
-    const openaiMessages = [
+    const openaiMessages: any[] = [
       { role: 'system', content: preferences.systemPrompt },
       ...existingMessages.map(m => ({ role: m.role, content: m.content })),
       { role: 'user', content }
     ];
+    
+    // Prepare tools based on enabled preferences
+    const tools = preferences.enabledTools
+      .map(toolName => AVAILABLE_TOOLS[toolName as keyof typeof AVAILABLE_TOOLS])
+      .filter(tool => tool !== undefined);
     
     // Set response headers for streaming
     res.setHeader('Content-Type', 'text/event-stream');
@@ -395,28 +475,121 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
     const assistantMessageId = uuidv4();
     
     try {
-      // Call OpenAI with streaming
-      // Note: gpt-5-mini and o1 models only support temperature=1 (default)
-      const isReasoningModel = preferences.model.includes('gpt-5') || preferences.model.includes('o1');
-      
-      const stream = await openaiClient.chat.completions.create({
-        model: preferences.model,
-        messages: openaiMessages as any,
-        max_completion_tokens: preferences.maxTokens,
-        temperature: isReasoningModel ? undefined : preferences.temperature,
-        stream: true
-      });
-      
       // Send message ID first
       res.write(`data: ${JSON.stringify({ messageId: assistantMessageId, type: 'start' })}\n\n`);
       
-      // Stream the response
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || '';
-        if (delta) {
-          assistantContent += delta;
-          res.write(`data: ${JSON.stringify({ content: delta, type: 'delta' })}\n\n`);
+      // Function calling loop - continue until no more tool calls
+      let maxIterations = 5;
+      let iteration = 0;
+      
+      while (iteration < maxIterations) {
+        iteration++;
+        
+        // Call OpenAI with streaming
+        // Note: gpt-5-mini and o1 models only support temperature=1 (default)
+        const isReasoningModel = preferences.model.includes('gpt-5') || preferences.model.includes('o1');
+        
+        const stream = await openaiClient.chat.completions.create({
+          model: preferences.model,
+          messages: openaiMessages,
+          max_completion_tokens: preferences.maxTokens,
+          temperature: isReasoningModel ? undefined : preferences.temperature,
+          tools: tools.length > 0 ? tools : undefined,
+          tool_choice: tools.length > 0 ? 'auto' : undefined,
+          stream: true
+        });
+        
+        let currentContent = '';
+        let toolCalls: any[] = [];
+        let currentToolCall: any = null;
+        
+        // Stream the response
+        for await (const chunk of stream) {
+          const choice = chunk.choices[0];
+          
+          // Handle content delta
+          const delta = choice?.delta?.content || '';
+          if (delta) {
+            currentContent += delta;
+            assistantContent += delta;
+            res.write(`data: ${JSON.stringify({ content: delta, type: 'delta' })}\n\n`);
+          }
+          
+          // Handle tool calls
+          if (choice?.delta?.tool_calls) {
+            for (const toolCallDelta of choice.delta.tool_calls) {
+              const index = toolCallDelta.index;
+              
+              if (!toolCalls[index]) {
+                toolCalls[index] = {
+                  id: toolCallDelta.id || '',
+                  type: 'function',
+                  function: {
+                    name: toolCallDelta.function?.name || '',
+                    arguments: toolCallDelta.function?.arguments || ''
+                  }
+                };
+              } else {
+                if (toolCallDelta.function?.arguments) {
+                  toolCalls[index].function.arguments += toolCallDelta.function.arguments;
+                }
+              }
+            }
+          }
         }
+        
+        // If there are tool calls, execute them
+        if (toolCalls.length > 0) {
+          // Add assistant message with tool calls to history
+          openaiMessages.push({
+            role: 'assistant',
+            content: currentContent || null,
+            tool_calls: toolCalls
+          });
+          
+          // Send tool call notification to frontend
+          res.write(`data: ${JSON.stringify({ 
+            type: 'tool_calls', 
+            toolCalls: toolCalls.map(tc => ({ name: tc.function.name }))
+          })}\n\n`);
+          
+          // Execute each tool call
+          for (const toolCall of toolCalls) {
+            const functionName = toolCall.function.name;
+            const functionArgs = JSON.parse(toolCall.function.arguments);
+            
+            let functionResult = '';
+            
+            // Execute the function
+            if (functionName === 'regex_execute') {
+              functionResult = await executeRegex(
+                functionArgs.pattern,
+                functionArgs.text,
+                functionArgs.flags
+              );
+              
+              // Send tool execution notification
+              res.write(`data: ${JSON.stringify({ 
+                type: 'tool_result',
+                toolName: functionName,
+                preview: `Regex matched ${JSON.parse(functionResult).matchCount || 0} times`
+              })}\n\n`);
+            }
+            
+            // Add function result to messages
+            openaiMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: functionResult
+            });
+          }
+          
+          // Continue loop to get AI's response based on tool results
+          continue;
+        }
+        
+        // No more tool calls, we're done
+        break;
       }
       
       // Save assistant message
