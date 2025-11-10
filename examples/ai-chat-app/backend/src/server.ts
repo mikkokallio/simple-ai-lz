@@ -204,7 +204,7 @@ async function loadPreferences(userId: string): Promise<UserPreferences> {
     // Return defaults if not found
     return {
       model: 'gpt-4o',
-      temperature: 0.7,
+      temperature: 1,
       maxTokens: 2000,
       systemPrompt: 'You are a helpful AI assistant.'
     };
@@ -230,7 +230,7 @@ const app = express();
 
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: true,
   credentials: true
 }));
 app.use(morgan('combined'));
@@ -370,11 +370,14 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
     
     try {
       // Call OpenAI with streaming
+      // Note: gpt-5-mini and o1 models only support temperature=1 (default)
+      const isReasoningModel = preferences.model.includes('gpt-5') || preferences.model.includes('o1');
+      
       const stream = await openaiClient.chat.completions.create({
         model: preferences.model,
         messages: openaiMessages as any,
-        temperature: preferences.temperature,
-        max_tokens: preferences.maxTokens,
+        max_completion_tokens: preferences.maxTokens,
+        temperature: isReasoningModel ? undefined : preferences.temperature,
         stream: true
       });
       

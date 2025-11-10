@@ -25,17 +25,29 @@ interface UserPreferences {
   systemPrompt: string;
 }
 
-// API functions
-const API_BASE = '/api';
+// API configuration - direct backend URL (no nginx proxy)
+declare global {
+  interface Window {
+    ENV?: {
+      BACKEND_URL?: string;
+    };
+  }
+}
 
+const API_BASE_URL = window.ENV?.BACKEND_URL || 
+  (window.location.hostname === 'localhost' 
+    ? 'http://localhost:5000' 
+    : 'https://aca-ai-chat-backend-ezle7syi.mangosmoke-47a72d95.swedencentral.azurecontainerapps.io');
+
+// API functions
 async function fetchThreads(): Promise<Thread[]> {
-  const response = await fetch(`${API_BASE}/threads`);
+  const response = await fetch(`${API_BASE_URL}/api/threads`);
   if (!response.ok) throw new Error('Failed to fetch threads');
   return response.json();
 }
 
 async function createThread(title?: string): Promise<Thread> {
-  const response = await fetch(`${API_BASE}/threads`, {
+  const response = await fetch(`${API_BASE_URL}/api/threads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title })
@@ -45,14 +57,14 @@ async function createThread(title?: string): Promise<Thread> {
 }
 
 async function deleteThread(threadId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/threads/${threadId}`, {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
     method: 'DELETE'
   });
   if (!response.ok) throw new Error('Failed to delete thread');
 }
 
 async function fetchMessages(threadId: string): Promise<Message[]> {
-  const response = await fetch(`${API_BASE}/threads/${threadId}/messages`);
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`);
   if (!response.ok) throw new Error('Failed to fetch messages');
   return response.json();
 }
@@ -64,7 +76,7 @@ async function sendMessage(
   onComplete: (thread: Thread) => void,
   onError: (error: string) => void
 ): Promise<void> {
-  const response = await fetch(`${API_BASE}/threads/${threadId}/messages`, {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content })
@@ -109,13 +121,13 @@ async function sendMessage(
 }
 
 async function fetchPreferences(): Promise<UserPreferences> {
-  const response = await fetch(`${API_BASE}/preferences`);
+  const response = await fetch(`${API_BASE_URL}/api/preferences`);
   if (!response.ok) throw new Error('Failed to fetch preferences');
   return response.json();
 }
 
 async function updatePreferences(preferences: UserPreferences): Promise<UserPreferences> {
-  const response = await fetch(`${API_BASE}/preferences`, {
+  const response = await fetch(`${API_BASE_URL}/api/preferences`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(preferences)
