@@ -147,7 +147,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [preferences, setPreferences] = useState<UserPreferences>({
     model: 'gpt-4o',
-    temperature: 0.7,
+    temperature: 1,
     maxTokens: 2000,
     systemPrompt: 'You are a helpful AI assistant.'
   });
