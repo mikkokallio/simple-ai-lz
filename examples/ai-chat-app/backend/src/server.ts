@@ -33,6 +33,7 @@ interface UserPreferences {
 }
 
 // Environment variables
+const NODE_ENV = process.env.NODE_ENV || 'development';
 const PORT = process.env.PORT || 5000;
 const STORAGE_ACCOUNT_NAME = process.env.AZURE_STORAGE_ACCOUNT_NAME || '';
 const STORAGE_CONTAINER_NAME = process.env.AZURE_STORAGE_CONTAINER_NAME || 'chat-data';
@@ -69,15 +70,23 @@ async function initializeStorage() {
 // Initialize OpenAI client
 async function initializeOpenAI() {
   try {
+    console.log('🔧 Initializing OpenAI client...');
+    console.log(`  Endpoint: ${AI_FOUNDRY_ENDPOINT}`);
+    console.log(`  Deployment: ${AI_FOUNDRY_DEPLOYMENT}`);
+    console.log(`  Has API Key: ${!!AI_FOUNDRY_KEY}`);
+    
     // Use API key if provided (for Azure deployment), otherwise use managed identity
     if (AI_FOUNDRY_KEY) {
+      console.log('  Using API key from Key Vault');
       openaiClient = new OpenAI({
         apiKey: AI_FOUNDRY_KEY,
         baseURL: `${AI_FOUNDRY_ENDPOINT}/openai/deployments/${AI_FOUNDRY_DEPLOYMENT}`,
         defaultQuery: { 'api-version': '2024-10-01-preview' },
-        defaultHeaders: { 'api-key': AI_FOUNDRY_KEY }
+        defaultHeaders: { 'api-key': AI_FOUNDRY_KEY },
+        timeout: 30000  // 30 second timeout
       });
     } else {
+      console.log('  Using Managed Identity');
       const credential = new DefaultAzureCredential();
       const tokenResponse = await credential.getToken('https://cognitiveservices.azure.com/.default');
       
@@ -85,13 +94,15 @@ async function initializeOpenAI() {
         apiKey: tokenResponse.token,
         baseURL: `${AI_FOUNDRY_ENDPOINT}/openai/deployments/${AI_FOUNDRY_DEPLOYMENT}`,
         defaultQuery: { 'api-version': '2024-10-01-preview' },
-        defaultHeaders: { 'api-key': tokenResponse.token }
+        defaultHeaders: { 'api-key': tokenResponse.token },
+        timeout: 30000  // 30 second timeout
       });
     }
     
-    console.log('✅ OpenAI client initialized');
+    console.log('✅ OpenAI client initialized successfully');
   } catch (error) {
     console.error('❌ Failed to initialize OpenAI:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace');
     throw error;
   }
 }
@@ -462,16 +473,37 @@ app.put('/api/preferences', async (req: Request, res: Response) => {
 // Start server
 async function startServer() {
   try {
-    await initializeStorage();
-    await initializeOpenAI();
+    console.log('🚀 Starting AI Chat Backend...');
+    console.log(`  Node.js version: ${process.version}`);
+    console.log(`  Environment: ${NODE_ENV}`);
+    console.log(`  Port: ${PORT}`);
     
+    console.log('\n📦 Initializing storage...');
+    const storageTimeout = setTimeout(() => {
+      console.error('⚠️  Storage initialization taking too long (>30s)');
+    }, 30000);
+    await initializeStorage();
+    clearTimeout(storageTimeout);
+    
+    console.log('\n🤖 Initializing OpenAI...');
+    const openaiTimeout = setTimeout(() => {
+      console.error('⚠️  OpenAI initialization taking too long (>30s)');
+    }, 30000);
+    await initializeOpenAI();
+    clearTimeout(openaiTimeout);
+    
+    console.log('\n🎉 Starting HTTP server...');
     app.listen(PORT, () => {
-      console.log(`🚀 AI Chat Backend running on port ${PORT}`);
-      console.log(`📦 Storage: ${STORAGE_ACCOUNT_NAME}/${STORAGE_CONTAINER_NAME}`);
-      console.log(`🤖 AI Foundry: ${AI_FOUNDRY_ENDPOINT}`);
+      console.log(`\n✅ AI Chat Backend running on port ${PORT}`);
+      console.log(`   Storage: ${STORAGE_ACCOUNT_NAME}/${STORAGE_CONTAINER_NAME}`);
+      console.log(`   AI Foundry: ${AI_FOUNDRY_ENDPOINT}`);
+      console.log(`   Deployment: ${AI_FOUNDRY_DEPLOYMENT}`);
+      console.log('\nReady to accept connections!\n');
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('\n❌ Failed to start server:', error);
+    console.error('Error details:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace');
     process.exit(1);
   }
 }

@@ -283,42 +283,53 @@ function App() {
     }
   };
 
-  // Styles
+  // Styles - ChatGPT-like with OCR app colors
   const styles = {
     container: {
       display: 'flex',
       height: '100vh',
       overflow: 'hidden',
-      background: '#f5f5f5'
+      background: '#fafafa',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
     } as React.CSSProperties,
     sidebar: {
       width: '280px',
-      background: '#ffffff',
-      borderRight: '1px solid #d1d5db',
+      background: '#202123',
       display: 'flex',
-      flexDirection: 'column'
+      flexDirection: 'column',
+      color: '#ffffff'
     } as React.CSSProperties,
     sidebarHeader: {
-      padding: '16px',
-      borderBottom: '1px solid #d1d5db',
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center'
+      padding: '12px',
+      borderBottom: '1px solid #4a4a4f'
     } as React.CSSProperties,
     sidebarTitle: {
-      fontSize: '18px',
+      fontSize: '14px',
       fontWeight: '600',
-      color: '#1f2937'
+      color: '#ececf1',
+      marginBottom: '12px'
     } as React.CSSProperties,
     newThreadButton: {
-      padding: '8px 16px',
-      background: '#0078d4',
-      color: 'white',
-      border: 'none',
-      borderRadius: '4px',
+      width: '100%',
+      padding: '12px',
+      background: 'transparent',
+      color: '#ffffff',
+      border: '1px solid #565869',
+      borderRadius: '8px',
       cursor: 'pointer',
       fontSize: '14px',
-      fontWeight: '500'
+      fontWeight: '500',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      transition: 'all 0.2s',
+      hover: {
+        background: '#2a2b32'
+      }
+    } as React.CSSProperties,
+    newThreadButtonHover: {
+      background: '#2a2b32'
     } as React.CSSProperties,
     threadList: {
       flex: 1,
@@ -328,47 +339,61 @@ function App() {
     threadItem: {
       padding: '12px',
       margin: '4px 0',
-      background: '#f9fafb',
-      border: '1px solid #e5e7eb',
-      borderRadius: '6px',
+      background: 'transparent',
+      border: 'none',
+      borderRadius: '8px',
       cursor: 'pointer',
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
-      transition: 'background 0.2s'
+      transition: 'background 0.2s',
+      color: '#ececf1'
+    } as React.CSSProperties,
+    threadItemHover: {
+      background: '#2a2b32'
     } as React.CSSProperties,
     threadItemActive: {
-      background: '#e0f2fe',
-      borderColor: '#0078d4'
+      background: '#343541',
+      borderLeft: '3px solid #0078d4'
     } as React.CSSProperties,
     threadTitle: {
       fontSize: '14px',
-      color: '#1f2937',
+      color: '#ececf1',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
-      flex: 1
+      flex: 1,
+      textAlign: 'left'
     } as React.CSSProperties,
     deleteButton: {
-      padding: '4px 8px',
-      background: '#ef4444',
-      color: 'white',
-      border: 'none',
-      borderRadius: '4px',
+      padding: '6px 12px',
+      background: 'transparent',
+      color: '#ef4444',
+      border: '1px solid #ef4444',
+      borderRadius: '6px',
       cursor: 'pointer',
       fontSize: '12px',
-      marginLeft: '8px'
+      marginLeft: '8px',
+      transition: 'all 0.2s'
+    } as React.CSSProperties,
+    deleteButtonHover: {
+      background: '#ef4444',
+      color: '#ffffff'
     } as React.CSSProperties,
     settingsButton: {
-      padding: '8px 16px',
-      background: '#6b7280',
-      color: 'white',
-      border: 'none',
-      borderRadius: '4px',
+      padding: '12px',
+      margin: '8px',
+      background: 'transparent',
+      color: '#ececf1',
+      border: '1px solid #565869',
+      borderRadius: '8px',
       cursor: 'pointer',
       fontSize: '14px',
-      width: '100%',
-      margin: '8px'
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      transition: 'all 0.2s'
     } as React.CSSProperties,
     mainArea: {
       flex: 1,
@@ -378,13 +403,13 @@ function App() {
     } as React.CSSProperties,
     chatHeader: {
       padding: '16px 24px',
-      borderBottom: '1px solid #d1d5db',
+      borderBottom: '1px solid #e5e7eb',
       background: '#ffffff'
     } as React.CSSProperties,
     chatTitle: {
-      fontSize: '20px',
+      fontSize: '18px',
       fontWeight: '600',
-      color: '#1f2937'
+      color: '#202123'
     } as React.CSSProperties,
     messagesContainer: {
       flex: 1,
@@ -469,79 +494,97 @@ function App() {
       left: 0,
       right: 0,
       bottom: 0,
-      background: 'rgba(0, 0, 0, 0.5)',
+      background: 'rgba(0, 0, 0, 0.6)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 1000
+      zIndex: 1000,
+      backdropFilter: 'blur(4px)'
     } as React.CSSProperties,
     modalContent: {
       background: 'white',
-      padding: '24px',
-      borderRadius: '8px',
+      padding: '32px',
+      borderRadius: '16px',
       width: '500px',
       maxHeight: '80vh',
-      overflowY: 'auto'
+      overflowY: 'auto',
+      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+      animation: 'slideUp 0.3s ease-out'
     } as React.CSSProperties,
     modalHeader: {
-      fontSize: '20px',
+      fontSize: '24px',
       fontWeight: '600',
-      marginBottom: '20px',
-      color: '#1f2937'
+      marginBottom: '24px',
+      color: '#202123'
     } as React.CSSProperties,
     formGroup: {
       marginBottom: '16px'
     } as React.CSSProperties,
     label: {
       display: 'block',
-      marginBottom: '6px',
+      marginBottom: '8px',
       fontSize: '14px',
-      fontWeight: '500',
-      color: '#374151'
+      fontWeight: '600',
+      color: '#202123'
     } as React.CSSProperties,
     input: {
       width: '100%',
-      padding: '8px 12px',
+      padding: '10px 14px',
       border: '1px solid #d1d5db',
-      borderRadius: '4px',
-      fontSize: '14px'
+      borderRadius: '8px',
+      fontSize: '14px',
+      transition: 'border-color 0.2s, box-shadow 0.2s',
+      outline: 'none'
     } as React.CSSProperties,
     textareaLarge: {
       width: '100%',
-      padding: '8px 12px',
+      padding: '10px 14px',
       border: '1px solid #d1d5db',
-      borderRadius: '4px',
+      borderRadius: '8px',
       fontSize: '14px',
-      minHeight: '100px',
+      minHeight: '120px',
       fontFamily: 'inherit',
-      resize: 'vertical'
+      resize: 'vertical',
+      transition: 'border-color 0.2s, box-shadow 0.2s',
+      outline: 'none'
     } as React.CSSProperties,
     modalButtons: {
       display: 'flex',
       gap: '12px',
-      marginTop: '20px'
+      marginTop: '24px'
     } as React.CSSProperties,
     saveButton: {
       flex: 1,
-      padding: '10px',
+      padding: '12px',
       background: '#0078d4',
       color: 'white',
       border: 'none',
-      borderRadius: '4px',
+      borderRadius: '8px',
       cursor: 'pointer',
-      fontSize: '14px',
-      fontWeight: '600'
+      fontSize: '15px',
+      fontWeight: '600',
+      transition: 'all 0.2s'
+    } as React.CSSProperties,
+    saveButtonHover: {
+      background: '#0063b1',
+      transform: 'translateY(-1px)',
+      boxShadow: '0 4px 12px rgba(0, 120, 212, 0.3)'
     } as React.CSSProperties,
     cancelButton: {
       flex: 1,
-      padding: '10px',
-      background: '#6b7280',
-      color: 'white',
-      border: 'none',
-      borderRadius: '4px',
+      padding: '12px',
+      background: 'transparent',
+      color: '#6b7280',
+      border: '1px solid #d1d5db',
+      borderRadius: '8px',
       cursor: 'pointer',
-      fontSize: '14px',
-      fontWeight: '600'
+      fontSize: '15px',
+      fontWeight: '600',
+      transition: 'all 0.2s'
+    } as React.CSSProperties,
+    cancelButtonHover: {
+      background: '#f3f4f6',
+      borderColor: '#9ca3af'
     } as React.CSSProperties
   };
 

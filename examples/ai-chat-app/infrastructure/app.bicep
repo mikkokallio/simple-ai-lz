@@ -33,11 +33,12 @@ param aiFoundryEndpoint string = 'https://foundry-mikkolabs.cognitiveservices.az
 @description('AI Foundry deployment name (model)')
 param aiFoundryDeployment string = 'gpt-5-mini'
 
-@description('Key Vault name for retrieving the AI Foundry API key')
-param keyVaultName string
+@description('AI Foundry API key (passed as secure parameter)')
+@secure()
+param aiFoundryKey string
 
-@description('Name of the secret in Key Vault containing the AI Foundry API key')
-param aiFoundryKeySecretName string = 'ai-foundry-key'
+@description('Key Vault name (for reference, though ai-foundry-key is now a Container App secret)')
+param keyVaultName string
 
 @description('Frontend container image')
 param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
@@ -56,17 +57,9 @@ var frontendAppName = 'aca-${appNamePrefix}-frontend-${uniqueSuffix}'
 // Storage Blob Data Contributor role for blob storage
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
-// Key Vault Secrets User role for reading secrets
-var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
-
 // ============================================================================
 // BACKEND CONTAINER APP
 // ============================================================================
-
-// Reference to Key Vault for retrieving secrets
-resource keyVault 'Microsoft.KeyVault/vaults@2023-02-01' existing = {
-  name: keyVaultName
-}
 
 resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
   name: backendAppName
@@ -99,8 +92,7 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
         }
         {
           name: 'ai-foundry-key'
-          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${aiFoundryKeySecretName}'
-          identity: 'system'
+          value: aiFoundryKey
         }
       ]
       ingress: {
@@ -265,17 +257,6 @@ resource backendToStorageRbac 'Microsoft.Authorization/roleAssignments@2022-04-0
   scope: storageAccountService
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-    principalId: backendApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// RBAC to Key Vault for reading AI Foundry API key
-resource backendToKeyVaultRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(backendApp.id, keyVault.id, keyVaultSecretsUserRoleId)
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
     principalId: backendApp.identity.principalId
     principalType: 'ServicePrincipal'
   }
