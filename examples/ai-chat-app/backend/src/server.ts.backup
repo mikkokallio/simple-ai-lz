@@ -8,7 +8,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { FoundryAgentClient } from './agents/foundryClient';
-import { AgentManager, AgentMetadata } from './agents/agentManager';
+import { AgentManager } from './agents/agentManager';
 import { CosmosAgentManager } from './agents/cosmosAgentManager';
 
 // Types
@@ -154,19 +154,19 @@ async function initializeAgentClient() {
     foundryAgentClient = new FoundryAgentClient(AI_FOUNDRY_PROJECT_ENDPOINT);
     await foundryAgentClient.initialize();
     
-    // Initialize agent manager (Cosmos DB required)
+    // Initialize agent manager (prefer Cosmos DB if available)
     if (COSMOS_ENDPOINT && COSMOS_DATABASE_NAME) {
       console.log('📊 Using Cosmos DB for agent metadata');
       const cosmosManager = new CosmosAgentManager(COSMOS_ENDPOINT, COSMOS_DATABASE_NAME);
       await cosmosManager.initialize();
       agentManager = cosmosManager;
+    } else if (STORAGE_ACCOUNT_NAME && STORAGE_CONTAINER_NAME) {
+      console.log('📦 Using Blob Storage for agent metadata (fallback)');
+      agentManager = new AgentManager(STORAGE_ACCOUNT_NAME, STORAGE_CONTAINER_NAME);
     } else {
-      console.log('⚠️  Cosmos DB not configured for agent metadata');
+      console.log('⚠️  No storage configured for agent metadata');
       return;
     }
-    
-    // Create default agent if it doesn't exist
-    await ensureDefaultAgent();
     
     console.log('✅ Foundry Agent Client initialized successfully');
   } catch (error) {
@@ -175,66 +175,83 @@ async function initializeAgentClient() {
   }
 }
 
-// Ensure default agent exists in Foundry
-async function ensureDefaultAgent() {
+// Storage helper functions
+async function saveThread(userId: string, thread: Thread): Promise<void> {
+  const blobName = `${userId}/threads/${thread.threadId}.json`;
+  const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+  await blockBlobClient.upload(JSON.stringify(thread, null, 2), JSON.stringify(thread).length, {
+    blobHTTPHeaders: { blobContentType: 'application/json' }
+  });
+}
+
+async function loadThread(userId: string, threadId: string): Promise<Thread | null> {
   try {
-    if (!foundryAgentClient || !agentManager) return;
-    
-    const defaultAgentId = `default-agent-${STATIC_USER_ID}`;
-    
-    // Check if default agent already exists in metadata
-    const existingAgent = await agentManager.getAgent(defaultAgentId);
-    if (existingAgent) {
-      console.log(`✅ Default agent already exists: ${defaultAgentId}`);
-      return;
-    }
-    
-    // Check if agent exists in Foundry
-    const foundryAgents = await foundryAgentClient.listAgents();
-    let defaultAgent = foundryAgents.find((a: any) => a.id === defaultAgentId);
-    
-    if (!defaultAgent) {
-      // Create default agent in Foundry
-      console.log(`📝 Creating default agent in Foundry: ${defaultAgentId}`);
-      defaultAgent = await foundryAgentClient.createAgent({
-        id: defaultAgentId,
-        name: `Default Agent (${STATIC_USER_ID})`,
-        instructions: 'You are a helpful AI assistant.',
-        model: 'gpt-4o'
-      });
-    }
-    
-    // Save to metadata with isDefault flag
-    await agentManager.importAgent({
-      id: defaultAgent.id,
-      foundryAgentId: defaultAgent.id,  // For default agent, internal ID = Foundry ID
-      name: defaultAgent.name,
-      instructions: defaultAgent.instructions,
-      model: defaultAgent.model,
-      importedAt: new Date().toISOString(),
-      foundryProjectEndpoint: AI_FOUNDRY_PROJECT_ENDPOINT,
-      isDefault: true
-    });
-    
-    console.log(`✅ Default agent created: ${defaultAgentId}`);
-  } catch (error) {
-    console.error('⚠️  Failed to create default agent:', error);
-    // Don't throw - continue with initialization
+    const blobName = `${userId}/threads/${threadId}.json`;
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+    const downloadResponse = await blockBlobClient.download(0);
+    const content = await streamToString(downloadResponse.readableStreamBody!);
+    return JSON.parse(content);
+  } catch (error: any) {
+    if (error.statusCode === 404) return null;
+    throw error;
   }
 }
 
-// ============================================================================
-// DEPRECATED BLOB STORAGE FUNCTIONS - KEPT FOR REFERENCE
-// Threads are now managed via Agent Service + Cosmos DB
-// ============================================================================
-/*
-async function saveThread(userId: string, thread: Thread): Promise<void> { ... }
-async function loadThread(userId: string, threadId: string): Promise<Thread | null> { ... }
-async function listThreads(userId: string): Promise<Thread[]> { ... }
-async function deleteThread(userId: string, threadId: string): Promise<void> { ... }
-async function saveMessage(userId: string, message: Message): Promise<void> { ... }
-async function loadMessages(userId: string, threadId: string): Promise<Message[]> { ... }
-*/
+async function listThreads(userId: string): Promise<Thread[]> {
+  const threads: Thread[] = [];
+  const prefix = `${userId}/threads/`;
+  
+  for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+    if (blob.name.endsWith('.json')) {
+      const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
+      const downloadResponse = await blockBlobClient.download(0);
+      const content = await streamToString(downloadResponse.readableStreamBody!);
+      threads.push(JSON.parse(content));
+    }
+  }
+  
+  // Sort by updatedAt descending
+  return threads.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+async function deleteThread(userId: string, threadId: string): Promise<void> {
+  // Delete thread metadata
+  const threadBlobName = `${userId}/threads/${threadId}.json`;
+  const threadBlobClient = containerClient.getBlockBlobClient(threadBlobName);
+  await threadBlobClient.deleteIfExists();
+  
+  // Delete all messages in the thread
+  const messagesPrefix = `${userId}/messages/${threadId}/`;
+  for await (const blob of containerClient.listBlobsFlat({ prefix: messagesPrefix })) {
+    const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
+    await blockBlobClient.deleteIfExists();
+  }
+}
+
+async function saveMessage(userId: string, message: Message): Promise<void> {
+  const blobName = `${userId}/messages/${message.threadId}/${message.messageId}.json`;
+  const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+  await blockBlobClient.upload(JSON.stringify(message, null, 2), JSON.stringify(message).length, {
+    blobHTTPHeaders: { blobContentType: 'application/json' }
+  });
+}
+
+async function loadMessages(userId: string, threadId: string): Promise<Message[]> {
+  const messages: Message[] = [];
+  const prefix = `${userId}/messages/${threadId}/`;
+  
+  for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+    if (blob.name.endsWith('.json')) {
+      const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
+      const downloadResponse = await blockBlobClient.download(0);
+      const content = await streamToString(downloadResponse.readableStreamBody!);
+      messages.push(JSON.parse(content));
+    }
+  }
+  
+  // Sort by timestamp ascending
+  return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
 
 async function savePreferences(userId: string, preferences: UserPreferences): Promise<void> {
   const blobName = `${userId}/preferences.json`;
@@ -526,51 +543,48 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Get all threads (from all agents)
+// Get all threads
 app.get('/api/threads', async (req: Request, res: Response) => {
   try {
-    if (!agentManager) {
-      return res.json([]);
-    }
-    
-    // Get all agents
-    const agents = await agentManager.listAgents();
-    
-    // Get threads from all agents
-    const allThreads: any[] = [];
-    for (const agent of agents) {
-      const agentThreads = await agentManager.listThreads(agent.id);
-      // Add agent info to each thread
-      for (const thread of agentThreads) {
-        allThreads.push({
-          threadId: thread.id,
-          title: thread.title || 'New Chat',
-          createdAt: thread.createdAt,
-          updatedAt: thread.lastMessageAt,
-          messageCount: 0, // Not tracked anymore
-          agentId: thread.agentId,
-          isDefaultAgent: agent.isDefault || false
-        });
-      }
-    }
-    
-    // Sort by updated time descending
-    allThreads.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    
-    res.json(allThreads);
+    const threads = await listThreads(STATIC_USER_ID);
+    res.json(threads);
   } catch (error) {
     console.error('Error listing threads:', error);
     res.status(500).json({ error: 'Failed to list threads' });
   }
 });
 
-// Create new thread - REMOVED: Threads are now created on first message
-// app.post('/api/threads', ...)
+// Create new thread
+app.post('/api/threads', async (req: Request, res: Response) => {
+  try {
+    const { title } = req.body;
+    const thread: Thread = {
+      threadId: uuidv4(),
+      title: title || 'New Chat',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messageCount: 0
+    };
+    
+    await saveThread(STATIC_USER_ID, thread);
+    res.json(thread);
+  } catch (error) {
+    console.error('Error creating thread:', error);
+    res.status(500).json({ error: 'Failed to create thread' });
+  }
+});
 
-// Get thread by ID - NOW DEPRECATED (threads managed by agent service)
+// Get thread by ID
 app.get('/api/threads/:threadId', async (req: Request, res: Response) => {
   try {
-    return res.status(410).json({ error: 'This endpoint is deprecated. Threads are now managed via agent service.' });
+    const { threadId } = req.params;
+    const thread = await loadThread(STATIC_USER_ID, threadId);
+    
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    
+    res.json(thread);
   } catch (error) {
     console.error('Error loading thread:', error);
     res.status(500).json({ error: 'Failed to load thread' });
@@ -580,35 +594,8 @@ app.get('/api/threads/:threadId', async (req: Request, res: Response) => {
 // Delete thread
 app.delete('/api/threads/:threadId', async (req: Request, res: Response) => {
   try {
-    if (!agentManager || !foundryAgentClient) {
-      return res.status(503).json({ error: 'Agent service not available' });
-    }
-    
     const { threadId } = req.params;
-    
-    // Find which agent this thread belongs to
-    const agents = await agentManager.listAgents();
-    let foundAgent = null;
-    for (const agent of agents) {
-      const threads = await agentManager.listThreads(agent.id);
-      if (threads.some((t: any) => t.id === threadId)) {
-        foundAgent = agent;
-        break;
-      }
-    }
-    
-    if (!foundAgent) {
-      return res.status(404).json({ error: 'Thread not found' });
-    }
-    
-    // Delete from Foundry
-    await foundryAgentClient.deleteThread(threadId);
-    
-    // Delete metadata
-    if (agentManager instanceof CosmosAgentManager) {
-      await agentManager.deleteThread(threadId, foundAgent.id);
-    }
-    
+    await deleteThread(STATIC_USER_ID, threadId);
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting thread:', error);
@@ -616,10 +603,26 @@ app.delete('/api/threads/:threadId', async (req: Request, res: Response) => {
   }
 });
 
-// Update thread title - NOW DEPRECATED
+// Update thread title
 app.patch('/api/threads/:threadId', async (req: Request, res: Response) => {
   try {
-    return res.status(410).json({ error: 'This endpoint is deprecated. Thread titles are auto-generated.' });
+    const { threadId } = req.params;
+    const { title } = req.body;
+    
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({ error: 'Valid title is required' });
+    }
+    
+    const thread = await loadThread(STATIC_USER_ID, threadId);
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    
+    thread.title = title.trim();
+    thread.updatedAt = new Date().toISOString();
+    await saveThread(STATIC_USER_ID, thread);
+    
+    res.json(thread);
   } catch (error) {
     console.error('Error updating thread:', error);
     res.status(500).json({ error: 'Failed to update thread' });
@@ -629,126 +632,274 @@ app.patch('/api/threads/:threadId', async (req: Request, res: Response) => {
 // Get messages for a thread
 app.get('/api/threads/:threadId/messages', async (req: Request, res: Response) => {
   try {
-    if (!foundryAgentClient) {
-      return res.json([]);
-    }
-    
     const { threadId } = req.params;
-    const messages = await foundryAgentClient.getMessages(threadId);
-    
-    // Convert to expected format
-    const formattedMessages = messages.map((m: any) => ({
-      messageId: m.id,
-      threadId: threadId,
-      role: m.role,
-      content: m.content,
-      timestamp: new Date(m.createdAt).toISOString()
-    }));
-    
-    res.json(formattedMessages);
+    const messages = await loadMessages(STATIC_USER_ID, threadId);
+    res.json(messages);
   } catch (error) {
     console.error('Error loading messages:', error);
     res.status(500).json({ error: 'Failed to load messages' });
   }
 });
 
-// Send message and get AI response (unified endpoint for both default and imported agents)
+// Send message and get AI response
 app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
-    const { content, agentId } = req.body;
+    const { content } = req.body;
     
     if (!content || typeof content !== 'string') {
       return res.status(400).json({ error: 'Message content is required' });
     }
     
-    if (!agentManager || !foundryAgentClient) {
-      return res.status(503).json({ error: 'Agent service not available' });
+    // Load thread
+    const thread = await loadThread(STATIC_USER_ID, threadId);
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
     }
     
-    // If no agentId provided, use default agent
-    let targetAgentId = agentId;
-    let foundryAgentId: string;
+    // Load preferences
+    const preferences = await loadPreferences(STATIC_USER_ID);
     
-    if (!targetAgentId) {
-      // Find default agent
-      const agents = await agentManager.listAgents();
-      const defaultAgent = agents.find((a: AgentMetadata) => a.isDefault);
-      if (!defaultAgent) {
-        return res.status(500).json({ error: 'Default agent not found' });
-      }
-      targetAgentId = defaultAgent.id;
-      foundryAgentId = (defaultAgent as AgentMetadata).foundryAgentId || defaultAgent.id;
-    } else {
-      // Look up the agent to get the Foundry agent ID
-      const agent = await agentManager.getAgent(targetAgentId);
-      if (!agent) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
-      foundryAgentId = (agent as AgentMetadata).foundryAgentId || agent.id;
-    }
+    // Load existing messages for context
+    const existingMessages = await loadMessages(STATIC_USER_ID, threadId);
     
-    // Check if this is a new thread (threadId === 'new')
-    let actualThreadId = threadId;
-    if (threadId === 'new') {
-      // Create new thread in Foundry
-      actualThreadId = await foundryAgentClient.createThread(foundryAgentId);
-      
-      // Save thread metadata
-      await agentManager.saveThread({
-        id: actualThreadId,
-        agentId: targetAgentId,
-        createdAt: new Date().toISOString(),
-        lastMessageAt: new Date().toISOString(),
-        title: content.slice(0, 50) + (content.length > 50 ? '...' : '')
+    // Save user message
+    const userMessage: Message = {
+      messageId: uuidv4(),
+      threadId,
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString()
+    };
+    await saveMessage(STATIC_USER_ID, userMessage);
+    
+    // Prepare messages for OpenAI (add system prompt)
+    const openaiMessages: any[] = [
+      { role: 'system', content: preferences.systemPrompt },
+      ...existingMessages.map(m => ({ role: m.role, content: m.content })),
+      { role: 'user', content }
+    ];
+    
+    // Prepare tools based on enabled preferences
+    const enabledTools = preferences.enabledTools || ['regex_execute', 'calculate']; // Default if undefined
+    const tools = enabledTools
+      .map(toolName => AVAILABLE_TOOLS[toolName as keyof typeof AVAILABLE_TOOLS])
+      .filter(tool => tool !== undefined);
+    
+    // NOTE: MCP server support not yet available in Azure OpenAI API
+    // Prepare MCP servers as tools based on enabled preferences
+    // Testing with gpt-4.1 model and stable API version
+    const enabledMcpServerIds = preferences.enabledMcpServers || [];
+    const mcpTools = MCP_SERVERS
+      .filter(server => enabledMcpServerIds.includes(server.id))
+      .map(server => {
+        const mcpTool: any = {
+          type: 'mcp',
+          server_label: server.id,
+          server_url: server.url
+        };
+        if (server.apiKey && server.headerName) {
+          mcpTool.headers = {
+            [server.headerName]: server.apiKey
+          };
+        }
+        return mcpTool;
       });
-    }
     
-    // Set up SSE
+    // Combine function tools and MCP tools
+    const allTools = [...tools, ...mcpTools];
+    
+    // Set response headers for streaming
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     
-    res.write(`data: ${JSON.stringify({ type: 'start', threadId: actualThreadId })}\n\n`);
+    let assistantContent = '';
+    const assistantMessageId = uuidv4();
     
     try {
-      // Stream response from agent using Foundry agent ID
-      for await (const chunk of foundryAgentClient.sendMessage(foundryAgentId, actualThreadId, content)) {
-        if (chunk.type === 'text' && chunk.content) {
-          res.write(`data: ${JSON.stringify({ 
-            type: 'content',
-            content: chunk.content 
-          })}\n\n`);
-        } else if (chunk.type === 'tool_call') {
-          res.write(`data: ${JSON.stringify({ 
-            type: 'tool_call',
-            toolName: chunk.toolName,
-            toolArgs: chunk.toolArgs
-          })}\n\n`);
-        } else if (chunk.type === 'error') {
-          res.write(`data: ${JSON.stringify({ 
-            type: 'error',
-            error: chunk.content 
-          })}\n\n`);
-        } else if (chunk.type === 'done') {
-          res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+      // Send message ID first
+      res.write(`data: ${JSON.stringify({ messageId: assistantMessageId, type: 'start' })}\n\n`);
+      
+      // Function calling loop - continue until no more tool calls
+      let maxIterations = 5;
+      let iteration = 0;
+      
+      while (iteration < maxIterations) {
+        iteration++;
+        
+        // Call OpenAI with streaming
+        // Note: gpt-5-mini and o1 models only support temperature=1 (default)
+        const isReasoningModel = preferences.model.includes('gpt-5') || preferences.model.includes('o1');
+        
+        const completionParams: any = {
+          model: preferences.model,
+          messages: openaiMessages,
+          max_completion_tokens: preferences.maxTokens,
+          temperature: isReasoningModel ? undefined : preferences.temperature,
+          tools: allTools.length > 0 ? allTools : undefined,
+          tool_choice: allTools.length > 0 ? 'auto' : undefined,
+          stream: true
+        };
+        
+        // Log the tools being sent (including MCP servers)
+        console.log('🔧 Sending tools to OpenAI:');
+        console.log(JSON.stringify(allTools, null, 2));
+        
+        const stream: any = await openaiClient.chat.completions.create(completionParams);
+        
+        let currentContent = '';
+        let toolCalls: any[] = [];
+        let currentToolCall: any = null;
+        
+        // Stream the response
+        for await (const chunk of stream) {
+          const choice = chunk.choices[0];
+          
+          // Handle content delta
+          const delta = choice?.delta?.content || '';
+          if (delta) {
+            currentContent += delta;
+            assistantContent += delta;
+            res.write(`data: ${JSON.stringify({ content: delta, type: 'delta' })}\n\n`);
+          }
+          
+          // Handle tool calls
+          if (choice?.delta?.tool_calls) {
+            for (const toolCallDelta of choice.delta.tool_calls) {
+              const index = toolCallDelta.index;
+              
+              if (!toolCalls[index]) {
+                toolCalls[index] = {
+                  id: toolCallDelta.id || '',
+                  type: 'function',
+                  function: {
+                    name: toolCallDelta.function?.name || '',
+                    arguments: toolCallDelta.function?.arguments || ''
+                  }
+                };
+              } else {
+                if (toolCallDelta.function?.arguments) {
+                  toolCalls[index].function.arguments += toolCallDelta.function.arguments;
+                }
+              }
+            }
+          }
         }
+        
+        // If there are tool calls, execute them
+        if (toolCalls.length > 0) {
+          // Add assistant message with tool calls to history
+          openaiMessages.push({
+            role: 'assistant',
+            content: currentContent || null,
+            tool_calls: toolCalls
+          });
+          
+          // Send tool call notification to frontend
+          res.write(`data: ${JSON.stringify({ 
+            type: 'tool_calls', 
+            toolCalls: toolCalls.map(tc => ({ name: tc.function.name }))
+          })}\n\n`);
+          
+          // Execute each tool call
+          for (const toolCall of toolCalls) {
+            const functionName = toolCall.function.name;
+            const functionArgs = JSON.parse(toolCall.function.arguments);
+            
+            let functionResult = '';
+            
+            // Execute the function
+            if (functionName === 'regex_execute') {
+              functionResult = await executeRegex(
+                functionArgs.pattern,
+                functionArgs.text,
+                functionArgs.flags
+              );
+              
+              // Send tool execution notification
+              res.write(`data: ${JSON.stringify({ 
+                type: 'tool_result',
+                toolName: functionName,
+                preview: `Regex matched ${JSON.parse(functionResult).matchCount || 0} times`
+              })}\n\n`);
+            } else if (functionName === 'calculate') {
+              functionResult = await calculate(functionArgs.expression);
+              
+              const resultData = JSON.parse(functionResult);
+              // Send tool execution notification
+              res.write(`data: ${JSON.stringify({ 
+                type: 'tool_result',
+                toolName: functionName,
+                preview: resultData.success ? `Result: ${resultData.result}` : `Error: ${resultData.error}`
+              })}\n\n`);
+            } else if (functionName === 'get_datetime') {
+              functionResult = await getDatetime(functionArgs.timezone);
+              
+              const resultData = JSON.parse(functionResult);
+              // Send tool execution notification
+              let preview = 'Current date/time';
+              if (resultData.success) {
+                preview = `UTC: ${resultData.utc.iso}`;
+                if (resultData.local) {
+                  preview += ` | ${resultData.local.timezone}: ${resultData.local.datetime}`;
+                }
+              }
+              res.write(`data: ${JSON.stringify({ 
+                type: 'tool_result',
+                toolName: functionName,
+                preview: preview
+              })}\n\n`);
+            }
+            
+            // Add function result to messages
+            openaiMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: functionResult
+            });
+          }
+          
+          // Continue loop to get AI's response based on tool results
+          continue;
+        }
+        
+        // No more tool calls, we're done
+        break;
       }
       
-      // Update thread last message time
-      if (agentManager instanceof CosmosAgentManager) {
-        await agentManager.updateThreadLastMessage(actualThreadId, targetAgentId, new Date().toISOString());
+      // Save assistant message
+      const assistantMessage: Message = {
+        messageId: assistantMessageId,
+        threadId,
+        role: 'assistant',
+        content: assistantContent,
+        timestamp: new Date().toISOString()
+      };
+      await saveMessage(STATIC_USER_ID, assistantMessage);
+      
+      // Update thread metadata
+      thread.updatedAt = new Date().toISOString();
+      thread.messageCount = existingMessages.length + 2; // +2 for user and assistant messages
+      
+      // Update title if this is the first message
+      if (thread.messageCount === 2 && thread.title === 'New Chat') {
+        // Use first few words of user message as title
+        thread.title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
       }
       
+      await saveThread(STATIC_USER_ID, thread);
+      
+      // Send completion
+      res.write(`data: ${JSON.stringify({ type: 'done', thread })}\n\n`);
       res.end();
-    } catch (streamError) {
-      console.error('Error streaming message:', streamError);
-      res.write(`data: ${JSON.stringify({ 
-        type: 'error',
-        error: 'Failed to process message' 
-      })}\n\n`);
+      
+    } catch (openaiError) {
+      console.error('OpenAI API error:', openaiError);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to generate response' })}\n\n`);
       res.end();
     }
+    
   } catch (error) {
     console.error('Error processing message:', error);
     if (!res.headersSent) {
@@ -868,22 +1019,17 @@ app.post('/api/agents/import', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Agent not found in Foundry project' });
     }
     
-    // Use clean display name, but prepend "imported-agent-" to internal ID for tracking
-    const internalId = `imported-agent-${agent.id}`;
-    
-    // Save to local storage with isDefault: false
+    // Save to local storage
     await agentManager.importAgent({
-      id: internalId,                // Internal ID with prefix
-      foundryAgentId: agent.id,      // Original Foundry agent ID
-      name: agent.name,              // Clean display name for users
+      id: agent.id,
+      name: agent.name,
       instructions: agent.instructions,
       model: agent.model,
       importedAt: new Date().toISOString(),
-      foundryProjectEndpoint: AI_FOUNDRY_PROJECT_ENDPOINT,
-      isDefault: false
+      foundryProjectEndpoint: AI_FOUNDRY_PROJECT_ENDPOINT
     });
     
-    res.json({ success: true, agent: { ...agent, id: internalId, name: agent.name } });
+    res.json({ success: true, agent });
   } catch (error) {
     console.error('Error importing agent:', error);
     res.status(500).json({ error: 'Failed to import agent' });

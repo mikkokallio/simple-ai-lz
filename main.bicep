@@ -161,6 +161,20 @@ module storage 'modules/storage.bicep' = {
   }
 }
 
+// Cosmos DB (Free Tier - shared metadata storage)
+module cosmosDb 'modules/cosmosdb.bicep' = {
+  scope: rg
+  name: 'cosmosdb-deployment'
+  params: {
+    location: location
+    uniqueSuffix: uniqueSuffix
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    vnetId: network.outputs.vnetId
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    tags: commonTags
+  }
+}
+
 // ============================================================================
 // AI SERVICES
 // ============================================================================
@@ -295,6 +309,12 @@ output containerAppsStaticIp string = containerApps.outputs.staticIp
 // Storage outputs
 output storageAccountName string = storage.outputs.storageAccountName
 output storageAccountId string = storage.outputs.storageAccountId
+
+// Cosmos DB outputs
+output cosmosAccountName string = cosmosDb.outputs.cosmosAccountName
+output cosmosAccountId string = cosmosDb.outputs.cosmosAccountId
+output cosmosAccountEndpoint string = cosmosDb.outputs.cosmosAccountEndpoint
+output cosmosSetupInstructions string = cosmosDb.outputs.setupInstructions
 
 // Key Vault outputs
 output keyVaultName string = keyVault.outputs.keyVaultName

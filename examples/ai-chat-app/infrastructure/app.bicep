@@ -27,6 +27,12 @@ param storageAccountName string = ''
 @description('Storage account resource ID for RBAC')
 param storageAccountResourceId string = ''
 
+@description('Cosmos DB account name for agent metadata')
+param cosmosAccountName string = ''
+
+@description('Cosmos DB database name')
+param cosmosDatabaseName string = 'agent-metadata'
+
 @description('AI Foundry endpoint URL')
 param aiFoundryEndpoint string = 'https://foundry-mikkolabs.cognitiveservices.azure.com/'
 
@@ -56,6 +62,10 @@ var frontendAppName = 'aca-${appNamePrefix}-frontend-${uniqueSuffix}'
 
 // Storage Blob Data Contributor role for blob storage
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+// Cosmos DB Built-in Data Contributor role (00000000-0000-0000-0000-000000000002)
+// Note: This is a Cosmos DB-specific RBAC role, not an Azure RBAC role
+var cosmosDataContributorRoleDefinitionId = '00000000-0000-0000-0000-000000000002'
 
 // ============================================================================
 // BACKEND CONTAINER APP
@@ -143,6 +153,14 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'AI_FOUNDRY_KEY'
               secretRef: 'ai-foundry-key'
+            }
+            {
+              name: 'COSMOS_ENDPOINT'
+              value: !empty(cosmosAccountName) ? 'https://${cosmosAccountName}.documents.azure.com:443/' : ''
+            }
+            {
+              name: 'COSMOS_DATABASE_NAME'
+              value: cosmosDatabaseName
             }
             {
               name: 'SESSION_SECRET'
@@ -259,6 +277,22 @@ resource backendToStorageRbac 'Microsoft.Authorization/roleAssignments@2022-04-0
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
     principalId: backendApp.identity.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Reference to Cosmos DB Account
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' existing = if (!empty(cosmosAccountName)) {
+  name: cosmosAccountName
+}
+
+// RBAC to Cosmos DB for data plane access (using Cosmos DB's built-in RBAC)
+resource backendToCosmosRbac 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = if (!empty(cosmosAccountName)) {
+  name: guid(backendApp.id, cosmosAccount.id, cosmosDataContributorRoleDefinitionId)
+  parent: cosmosAccount
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', cosmosAccountName, cosmosDataContributorRoleDefinitionId)
+    principalId: backendApp.identity.principalId
+    scope: cosmosAccount.id
   }
 }
 

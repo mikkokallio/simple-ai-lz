@@ -35,7 +35,12 @@ interface Agent {
   isDefault?: boolean;  // True for user's default agent
 }
 
-// Removed - AgentMessage interface no longer used in unified architecture
+interface AgentMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: number;
+}
 
 interface UserPreferences {
   model: string;
@@ -67,8 +72,22 @@ async function fetchThreads(): Promise<Thread[]> {
   return response.json();
 }
 
-// Removed - threads now managed via Agent Service unified API
+async function createThread(title?: string): Promise<Thread> {
+  const response = await fetch(`${API_BASE_URL}/api/threads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title })
+  });
+  if (!response.ok) throw new Error('Failed to create thread');
+  return response.json();
+}
 
+async function deleteThread(threadId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
+    method: 'DELETE'
+  });
+  if (!response.ok) throw new Error('Failed to delete thread');
+}
 
 async function fetchMessages(threadId: string): Promise<Message[]> {
   const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`);
@@ -76,8 +95,63 @@ async function fetchMessages(threadId: string): Promise<Message[]> {
   return response.json();
 }
 
-// Removed - using unified message sending in handleSendMessage
+async function sendMessage(
+  threadId: string,
+  content: string,
+  onChunk: (chunk: string) => void,
+  onComplete: (thread: Thread) => void,
+  onError: (error: string) => void
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content })
+  });
 
+  if (!response.ok) {
+    throw new Error('Failed to send message');
+  }
+
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+
+  if (!reader) {
+    throw new Error('No response body');
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice(6));
+
+          if (data.type === 'delta' && data.content) {
+            onChunk(data.content);
+          } else if (data.type === 'tool_calls') {
+            // AI is calling tools - show notification
+            const toolNames = data.toolCalls.map((tc: any) => tc.name).join(', ');
+            onChunk(`\n\n🔧 *Using tools: ${toolNames}*\n\n`);
+          } else if (data.type === 'tool_result') {
+            // Tool execution result
+            onChunk(`\n📊 *${data.toolName}: ${data.preview}*\n\n`);
+          } else if (data.type === 'done' && data.thread) {
+            onComplete(data.thread);
+          } else if (data.type === 'error') {
+            onError(data.error || 'Unknown error');
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 async function fetchPreferences(): Promise<UserPreferences> {
   const response = await fetch(`${API_BASE_URL}/api/preferences`);
@@ -144,18 +218,95 @@ async function deleteAgent(agentId: string): Promise<void> {
   if (!response.ok) throw new Error('Failed to delete agent');
 }
 
-async function deleteThread(threadId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
+async function createAgentThread(agentId: string): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/${agentId}/threads`, {
+    method: 'POST'
+  });
+  if (!response.ok) throw new Error('Failed to create agent thread');
+  const data = await response.json();
+  return data.threadId;
+}
+
+async function fetchAgentThreads(agentId: string): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/${agentId}/threads`);
+  if (!response.ok) throw new Error('Failed to fetch agent threads');
+  const data = await response.json();
+  return data.threads || [];
+}
+
+async function fetchAgentMessages(agentId: string, threadId: string): Promise<AgentMessage[]> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/${agentId}/threads/${threadId}/messages`);
+  if (!response.ok) throw new Error('Failed to fetch agent messages');
+  return response.json();
+}
+
+async function deleteAgentThread(agentId: string, threadId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/${agentId}/threads/${threadId}`, {
     method: 'DELETE'
   });
   if (!response.ok) throw new Error('Failed to delete thread');
 }
 
-// Removed - using unified thread/message API via Agent Service
+async function sendAgentMessage(
+  agentId: string,
+  threadId: string,
+  message: string,
+  onChunk: (chunk: string) => void,
+  onToolCall?: (toolName: string) => void,
+  onComplete?: () => void,
+  onError?: (error: string) => void
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/${agentId}/threads/${threadId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message })
+  });
 
+  if (!response.ok || !response.body) {
+    throw new Error('Failed to send message to agent');
+  }
 
-// Removed - thread titles are auto-generated
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
 
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          
+          if (data.type === 'content') {
+            onChunk(data.content);
+          } else if (data.type === 'tool_call' && onToolCall) {
+            onToolCall(data.toolName);
+          } else if (data.type === 'done' && onComplete) {
+            onComplete();
+          } else if (data.type === 'error' && onError) {
+            onError(data.error);
+          }
+        } catch (e) {
+          // Ignore parse errors for incomplete chunks
+        }
+      }
+    }
+  }
+}
+
+async function updateThreadTitle(threadId: string, title: string): Promise<Thread> {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title })
+  });
+  if (!response.ok) throw new Error('Failed to update thread title');
+  return response.json();
+}
 
 // Main App Component
 function App() {
@@ -263,59 +414,70 @@ function App() {
     }
   }
 
-  // Handler: Select "Chat" (default agent, no specific thread)
-  function handleSelectChat() {
-    setCurrentThreadId(null);
-    setCurrentAgentId(null);
-    setMessages([]);
-    setStreamingContent('');
-  }
-
-  // Handler: Select an imported agent
-  function handleSelectAgent(agentId: string) {
-    const agent = agents.find(a => a.id === agentId);
-    if (agent?.isDefault) {
-      // If default agent, treat as Chat
-      handleSelectChat();
-    } else {
-      setCurrentAgentId(agentId);
-      setCurrentThreadId(null);
-      setMessages([]);
-      setStreamingContent('');
+  async function handleNewThread() {
+    try {
+      const newThread = await createThread();
+      setThreads([newThread, ...threads]);
+      setCurrentThreadId(newThread.threadId);
+    } catch (error) {
+      console.error('Error creating thread:', error);
     }
   }
 
-  // Handler: Delete thread
   async function handleDeleteThread(threadId: string) {
-    if (!confirm('Are you sure you want to delete this conversation?')) return;
+    if (!confirm('Are you sure you want to delete this thread?')) return;
 
     try {
       await deleteThread(threadId);
-      setThreads(threads.filter((t: Thread) => t.threadId !== threadId));
+      setThreads(threads.filter(t => t.threadId !== threadId));
       if (currentThreadId === threadId) {
-        handleSelectChat();
+        setCurrentThreadId(null);
       }
     } catch (error) {
       console.error('Error deleting thread:', error);
-      alert('Failed to delete thread');
     }
   }
 
+  async function handleUpdateThreadTitle(threadId: string, newTitle: string) {
+    if (!newTitle.trim()) {
+      setEditingThreadId(null);
+      setEditingThreadTitle('');
+      return;
+    }
+
+    try {
+      const updatedThread = await updateThreadTitle(threadId, newTitle.trim());
+      setThreads(threads.map(t => t.threadId === threadId ? updatedThread : t));
+      setEditingThreadId(null);
+      setEditingThreadTitle('');
+    } catch (error) {
+      console.error('Error updating thread title:', error);
+      alert('Failed to update thread title');
+    }
+  }
+
+  function handleStartEditingTitle(thread: Thread) {
+    setEditingThreadId(thread.threadId);
+    setEditingThreadTitle(thread.title);
+  }
+
+  function handleCancelEditingTitle() {
+    setEditingThreadId(null);
+    setEditingThreadTitle('');
+  }
+
   async function handleSendMessage() {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || !currentThreadId || isLoading) return;
 
     const userContent = inputValue;
     setInputValue('');
     setIsLoading(true);
     setStreamingContent('');
 
-    // Determine threadId: use existing or 'new' for first message
-    const threadId = currentThreadId || 'new';
-
     // Add user message to UI immediately
     const tempUserMessage: Message = {
       messageId: 'temp-' + Date.now(),
-      threadId: threadId,
+      threadId: currentThreadId,
       role: 'user',
       content: userContent,
       timestamp: new Date().toISOString()
@@ -323,65 +485,28 @@ function App() {
     setMessages([...messages, tempUserMessage]);
 
     try {
-      // Send message with agentId (null = use default agent)
-      const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          content: userContent,
-          agentId: currentAgentId // null for default agent
-        })
-      });
+      await sendMessage(
+        currentThreadId,
+        userContent,
+        (chunk) => {
+          setStreamingContent((prev) => prev + chunk);
+        },
+        (updatedThread) => {
+          // Reload messages to get the saved assistant message
+          loadMessages(currentThreadId);
+          setStreamingContent('');
+          setIsLoading(false);
 
-      if (!response.ok || !response.body) {
-        throw new Error('Failed to send message');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let actualThreadId = threadId;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              
-              if (data.type === 'start' && data.threadId) {
-                // New thread was created
-                actualThreadId = data.threadId;
-                if (!currentThreadId) {
-                  setCurrentThreadId(actualThreadId);
-                }
-              } else if (data.type === 'content') {
-                setStreamingContent((prev: string) => prev + data.content);
-              } else if (data.type === 'tool_call') {
-                setStreamingContent((prev: string) => prev + `\n\n🔧 *Using tool: ${data.toolName}*\n\n`);
-              } else if (data.type === 'done') {
-                // Reload messages and threads
-                if (actualThreadId && actualThreadId !== 'new') {
-                  await loadMessages(actualThreadId);
-                  await loadThreads();
-                }
-                setStreamingContent('');
-                setIsLoading(false);
-              } else if (data.type === 'error') {
-                alert('Error: ' + data.error);
-                setStreamingContent('');
-                setIsLoading(false);
-              }
-            } catch (e) {
-              // Ignore parse errors for incomplete chunks
-            }
-          }
+          // Update thread in list
+          setThreads(threads.map(t => t.threadId === updatedThread.threadId ? updatedThread : t));
+        },
+        (error) => {
+          console.error('Streaming error:', error);
+          setStreamingContent('');
+          setIsLoading(false);
+          alert('Failed to get response: ' + error);
         }
-      }
+      );
     } catch (error) {
       console.error('Error sending message:', error);
       setStreamingContent('');
@@ -431,8 +556,132 @@ function App() {
       setIsImporting(false);
     }
   }
+  
+  async function handleSelectAgent(agentId: string) {
+    setCurrentAgentId(agentId);
+    setCurrentThreadId(null);
+    setCurrentAgentThreadId(null);
+    setAgentMessages([]);
+    setAgentStreamingContent('');
+    
+    // Load existing threads for this agent
+    try {
+      const threads = await fetchAgentThreads(agentId);
+      setAgentThreads(threads);
+    } catch (error) {
+      console.error('Error loading agent threads:', error);
+      setAgentThreads([]);
+    }
+  }
+  
+  async function handleSelectAgentThread(threadId: string) {
+    if (!currentAgentId) return;
+    
+    setCurrentAgentThreadId(threadId);
+    setAgentStreamingContent('');
+    
+    // Load messages for this thread
+    try {
+      const messages = await fetchAgentMessages(currentAgentId, threadId);
+      setAgentMessages(messages);
+    } catch (error) {
+      console.error('Error loading agent messages:', error);
+      setAgentMessages([]);
+    }
+  }
+  
+  async function handleNewAgentThread() {
+    setCurrentAgentThreadId(null);
+    setAgentMessages([]);
+    setAgentStreamingContent('');
+  }
+  
+  async function handleDeleteAgentThread(threadId: string) {
+    if (!currentAgentId) return;
+    if (!confirm('Are you sure you want to delete this conversation?')) return;
+    
+    try {
+      await deleteAgentThread(currentAgentId, threadId);
+      const threads = await fetchAgentThreads(currentAgentId);
+      setAgentThreads(threads);
+      
+      if (currentAgentThreadId === threadId) {
+        setCurrentAgentThreadId(null);
+        setAgentMessages([]);
+      }
+    } catch (error) {
+      console.error('Error deleting agent thread:', error);
+      alert('Failed to delete conversation');
+    }
+  }
+  
+  async function handleSendAgentMessage() {
+    if (!inputValue.trim() || !currentAgentId || isLoading) return;
 
-  // Handler: Delete an imported agent
+    const userContent = inputValue;
+    setInputValue('');
+    setIsLoading(true);
+    setAgentStreamingContent('');
+
+    // Create thread if needed
+    let threadId = currentAgentThreadId;
+    if (!threadId) {
+      try {
+        threadId = await createAgentThread(currentAgentId);
+        setCurrentAgentThreadId(threadId);
+        // Reload thread list to show the new thread
+        const threads = await fetchAgentThreads(currentAgentId);
+        setAgentThreads(threads);
+      } catch (error) {
+        console.error('Error creating agent thread:', error);
+        alert('Failed to create conversation thread');
+        setIsLoading(false);
+        return;
+      }
+    }
+
+    // Add user message to UI
+    const tempUserMessage: AgentMessage = {
+      id: 'temp-' + Date.now(),
+      role: 'user',
+      content: userContent,
+      createdAt: Date.now()
+    };
+    setAgentMessages([...agentMessages, tempUserMessage]);
+
+    try {
+      await sendAgentMessage(
+        currentAgentId,
+        threadId,
+        userContent,
+        (chunk) => {
+          setAgentStreamingContent((prev: string) => prev + chunk);
+        },
+        (toolName) => {
+          setAgentStreamingContent((prev: string) => prev + `\n\n🔧 *Using tool: ${toolName}*\n\n`);
+        },
+        () => {
+          // Load final messages after completion
+          if (currentAgentId && threadId) {
+            fetchAgentMessages(currentAgentId, threadId).then(msgs => {
+              setAgentMessages(msgs);
+              setAgentStreamingContent('');
+            });
+          }
+          setIsLoading(false);
+        },
+        (error) => {
+          alert('Error: ' + error);
+          setIsLoading(false);
+        }
+      );
+    } catch (error) {
+      console.error('Error sending agent message:', error);
+      alert('Failed to send message to agent');
+      setIsLoading(false);
+    }
+  }
+  
   async function handleDeleteAgent(agentId: string) {
     if (!confirm('Are you sure you want to remove this agent?')) return;
     
@@ -440,7 +689,9 @@ function App() {
       await deleteAgent(agentId);
       await loadAgents();
       if (currentAgentId === agentId) {
-        handleSelectChat();
+        setCurrentAgentId(null);
+        setCurrentAgentThreadId(null);
+        setAgentMessages([]);
       }
     } catch (error) {
       console.error('Error deleting agent:', error);
@@ -451,31 +702,16 @@ function App() {
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage();
+      if (currentAgentId) {
+        handleSendAgentMessage();
+      } else {
+        handleSendMessage();
+      }
     }
   };
 
   // Styles - ChatGPT-like with OCR app colors
   const styles = {
-    scrollbar: `
-      .threadList::-webkit-scrollbar,
-      .collapsibleContent::-webkit-scrollbar {
-        width: 8px;
-      }
-      .threadList::-webkit-scrollbar-track,
-      .collapsibleContent::-webkit-scrollbar-track {
-        background: #1a1b1e;
-      }
-      .threadList::-webkit-scrollbar-thumb,
-      .collapsibleContent::-webkit-scrollbar-thumb {
-        background: #3a3b42;
-        border-radius: 4px;
-      }
-      .threadList::-webkit-scrollbar-thumb:hover,
-      .collapsibleContent::-webkit-scrollbar-thumb:hover {
-        background: #4a4b52;
-      }
-    `,
     container: {
       display: 'flex',
       height: '100vh',
@@ -826,154 +1062,115 @@ function App() {
     } as React.CSSProperties
   };
 
-  const currentThread = threads.find((t: Thread) => t.threadId === currentThreadId);
-  const importedAgents = agents.filter((a: Agent) => !a.isDefault);
-  const defaultAgentThreads = threads.filter((t: Thread) => t.isDefaultAgent);
-  const importedAgentThreads = threads.filter((t: Thread) => !t.isDefaultAgent);
+  const currentThread = threads.find(t => t.threadId === currentThreadId);
 
   return (
     <div style={styles.container}>
-      <style>{styles.scrollbar}</style>
       {/* Sidebar */}
       <div style={styles.sidebar}>
-        
-        {/* Chat Section - Default Agent */}
-        <div style={{ marginBottom: '16px' }}>
-          <div
-            style={{
-              ...styles.threadItem,
-              ...(currentAgentId === null ? styles.threadItemActive : {}),
-              fontWeight: '500'
-            }}
-            onClick={handleSelectChat}
-          >
-            💬 Chat
-          </div>
+        <div style={styles.sidebarHeader}>
+          <div style={styles.sidebarTitle}>Threads</div>
+          <button style={styles.newThreadButton} onClick={handleNewThread}>
+            New +
+          </button>
         </div>
-
-        {/* Agents Section - Imported Agents */}
-        <div style={{ borderTop: '1px solid #2a2b32', paddingTop: '16px', marginTop: '16px' }}>
-          <div style={{ ...styles.sidebarHeader, marginBottom: '12px', cursor: 'pointer' }} onClick={() => setShowAgentsList(!showAgentsList)}>
-            <div style={styles.sidebarTitle}>{showAgentsList ? '▼' : '▶'} Agents</div>
-          </div>
-          {showAgentsList && (
-            <div style={styles.threadList} className="threadList collapsibleContent">
-              {/* Import Agent Button - styled like a list item */}
-              <div
-                style={{
-                  ...styles.threadItem,
-                  border: '1px dashed #565869',
-                  color: '#a0a0a0'
-                }}
-                onClick={handleOpenAgentImport}
-              >
-                <div style={styles.threadTitle}>
-                  ➕ Import Agent
-                </div>
-              </div>
-              
-              {importedAgents.map((agent: Agent) => (
-                <div
-                  key={agent.id}
-                  style={{
-                    ...styles.threadItem,
-                    ...(currentAgentId === agent.id ? styles.threadItemActive : {})
-                  }}
-                  onClick={() => handleSelectAgent(agent.id)}
-                >
-                  <div style={styles.threadTitle}>
-                    🤖 {agent.name}
-                  </div>
-                  <button
-                    style={{
-                      ...styles.deleteButton,
-                      padding: '4px 8px',
-                      fontSize: '11px',
-                      opacity: 0,
-                      transition: 'opacity 0.2s'
-                    }}
-                    className="delete-btn-hover"
-                    onClick={(e: React.MouseEvent) => {
-                      e.stopPropagation();
-                      handleDeleteAgent(agent.id);
-                    }}
-                    onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '1';
-                    }}
-                    onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '0';
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              {importedAgents.length === 0 && (
-                <div style={{ padding: '12px', color: '#9ca3af', fontSize: '13px', textAlign: 'center' }}>
-                  No agents imported yet
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Threads Section - Show threads for selected agent or default */}
-        <div style={{ borderTop: '1px solid #2a2b32', paddingTop: '16px', marginTop: '16px' }}>
-          <div style={{ ...styles.sidebarHeader, marginBottom: '12px', cursor: 'pointer' }} onClick={() => setShowThreadsList(!showThreadsList)}>
-            <div style={styles.sidebarTitle}>{showThreadsList ? '▼' : '▶'} Threads</div>
-          </div>
-          {showThreadsList && (
-            <div style={styles.threadList} className="threadList collapsibleContent">
-              {(currentAgentId ? importedAgentThreads.filter((t: Thread) => t.agentId === currentAgentId) : defaultAgentThreads).map((thread: Thread) => (
-                <div
-                  key={thread.threadId}
-                  style={{
-                    ...styles.threadItem,
-                    ...(currentThreadId === thread.threadId ? styles.threadItemActive : {})
-                  }}
-                  onClick={() => {
-                    setCurrentThreadId(thread.threadId);
-                    // Only set agentId for imported agent threads, keep null for default agent
-                    if (thread.isDefaultAgent) {
-                      setCurrentAgentId(null);
-                    } else if (thread.agentId) {
-                      setCurrentAgentId(thread.agentId);
+        <div style={styles.threadList}>
+          {threads.map(thread => (
+            <div
+              key={thread.threadId}
+              style={{
+                ...styles.threadItem,
+                ...(currentThreadId === thread.threadId ? styles.threadItemActive : {})
+              }}
+              onClick={() => {
+                if (editingThreadId !== thread.threadId) {
+                  setCurrentThreadId(thread.threadId);
+                }
+              }}
+            >
+              {editingThreadId === thread.threadId ? (
+                <input
+                  style={styles.threadTitleInput}
+                  type="text"
+                  value={editingThreadTitle}
+                  onChange={(e) => setEditingThreadTitle(e.target.value)}
+                  onBlur={() => handleUpdateThreadTitle(thread.threadId, editingThreadTitle)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      handleUpdateThreadTitle(thread.threadId, editingThreadTitle);
+                    } else if (e.key === 'Escape') {
+                      handleCancelEditingTitle();
                     }
                   }}
+                  onClick={(e) => e.stopPropagation()}
+                  autoFocus
+                />
+              ) : (
+                <div 
+                  style={styles.threadTitle}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    handleStartEditingTitle(thread);
+                  }}
+                  title="Double-click to edit"
                 >
-                  <div style={styles.threadTitle}>
-                    {thread.isDefaultAgent ? '' : '🤖 '}{thread.title}
-                  </div>
-                  <button
-                    style={{
-                      ...styles.deleteButton,
-                      padding: '4px 8px',
-                      fontSize: '11px',
-                      opacity: 0,
-                      transition: 'opacity 0.2s'
-                    }}
-                    onClick={(e: React.MouseEvent) => {
-                      e.stopPropagation();
-                      handleDeleteThread(thread.threadId);
-                    }}
-                    onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '1';
-                    }}
-                    onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '0';
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              {(currentAgentId ? importedAgentThreads.filter((t: Thread) => t.agentId === currentAgentId).length === 0 : defaultAgentThreads.length === 0) && (
-                <div style={{ padding: '12px', color: '#9ca3af', fontSize: '13px', textAlign: 'center' }}>
-                  No threads yet - send a message to start
+                  {thread.title}
                 </div>
               )}
+              <button
+                style={styles.deleteButton}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteThread(thread.threadId);
+                }}
+              >
+                Delete
+              </button>
             </div>
-          )}
+          ))}
+        </div>
+        
+        {/* Agents Section */}
+        <div style={{ borderTop: '1px solid #2a2b32', paddingTop: '16px', marginTop: '16px' }}>
+          <div style={{ ...styles.sidebarHeader, marginBottom: '12px' }}>
+            <div style={styles.sidebarTitle}>Agents</div>
+            <button
+              style={{ ...styles.newThreadButton, fontSize: '12px', padding: '6px 12px' }}
+              onClick={handleOpenAgentImport}
+            >
+              Import
+            </button>
+          </div>
+          <div style={styles.threadList}>
+            {agents.map(agent => (
+              <div
+                key={agent.id}
+                style={{
+                  ...styles.threadItem,
+                  ...(currentAgentId === agent.id ? styles.threadItemActive : {})
+                }}
+                onClick={() => handleSelectAgent(agent.id)}
+              >
+                <div style={styles.threadTitle}>
+                  🤖 {agent.name}
+                </div>
+                <button
+                  style={{...styles.deleteButton, padding: '4px 8px', fontSize: '11px'}}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteAgent(agent.id);
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {agents.length === 0 && (
+              <div style={{ padding: '12px', color: '#9ca3af', fontSize: '13px', textAlign: 'center' }}>
+                No agents imported yet
+              </div>
+            )}
+          </div>
         </div>
         
         <button style={styles.settingsButton} onClick={() => setShowSettings(true)}>
@@ -981,65 +1178,178 @@ function App() {
         </button>
       </div>
 
-      {/* Main Chat Area - Unified for all agents */}
+      {/* Main Chat Area */}
       <div style={styles.mainArea}>
-        {/* Chat Header */}
-        <div style={styles.chatHeader}>
-          <div style={styles.chatTitle}>
-            {currentThread ? (
-              currentThread.title
-            ) : currentAgentId ? (
-              `🤖 ${agents.find((a: Agent) => a.id === currentAgentId)?.name || 'Agent'}`
-            ) : (
-              '💬 Chat'
-            )}
-          </div>
-        </div>
-
-        {/* Messages Container */}
-        <div style={styles.messagesContainer}>
-          {messages.map((message: Message) => (
-            <div key={message.messageId} style={styles.messageWrapper}>
-              <div
-                style={
-                  message.role === 'user'
-                    ? styles.messageUser
-                    : styles.messageAssistant
-                }
-              >
-                {message.content}
+        {currentAgentId ? (
+          /* Agent Chat View */
+          <>
+            <div style={styles.chatHeader}>
+              <div style={styles.chatTitle}>
+                🤖 {agents.find((a: Agent) => a.id === currentAgentId)?.name || 'Agent Chat'}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  style={{...styles.newThreadButton, padding: '6px 12px', fontSize: '13px'}}
+                  onClick={handleNewAgentThread}
+                >
+                  + New Conversation
+                </button>
               </div>
             </div>
-          ))}
-          {streamingContent && (
-            <div style={styles.messageWrapper}>
-              <div style={styles.messageAssistant}>{streamingContent}</div>
+            
+            {/* Agent Thread List */}
+            {agentThreads.length > 0 && !currentAgentThreadId && (
+              <div style={{ padding: '16px', backgroundColor: '#1a1b1e', borderBottom: '1px solid #2a2b32' }}>
+                <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '12px', color: '#e5e7eb' }}>
+                  Previous Conversations
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {agentThreads.map(thread => (
+                    <div
+                      key={thread.id}
+                      style={{
+                        padding: '12px',
+                        backgroundColor: '#2a2b32',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onClick={() => handleSelectAgentThread(thread.id)}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = '#32333a';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = '#2a2b32';
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: '13px', color: '#e5e7eb' }}>
+                          {thread.metadata?.title || 'Conversation'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px' }}>
+                          Created: {new Date(thread.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <button
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#9ca3af',
+                          cursor: 'pointer',
+                          padding: '4px 8px',
+                          fontSize: '11px'
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteAgentThread(thread.id);
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            <div style={styles.messagesContainer}>
+              {agentMessages.map(message => (
+                <div key={message.id} style={styles.messageWrapper}>
+                  <div
+                    style={
+                      message.role === 'user'
+                        ? styles.messageUser
+                        : styles.messageAssistant
+                    }
+                  >
+                    {message.content}
+                  </div>
+                </div>
+              ))}
+              {agentStreamingContent && (
+                <div style={styles.messageWrapper}>
+                  <div style={styles.messageAssistant}>{agentStreamingContent}</div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
             </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Area */}
-        <div style={styles.inputArea}>
-          <textarea
-            style={styles.textarea}
-            value={inputValue}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputValue(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-            disabled={isLoading}
-          />
-          <button
-            style={{
-              ...styles.sendButton,
-              ...(isLoading || !inputValue.trim() ? styles.sendButtonDisabled : {})
-            }}
-            onClick={handleSendMessage}
-            disabled={isLoading || !inputValue.trim()}
-          >
-            {isLoading ? 'Sending...' : 'Send'}
-          </button>
-        </div>
+            <div style={styles.inputArea}>
+              <textarea
+                style={styles.textarea}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="Type your message to the agent... (Enter to send, Shift+Enter for new line)"
+                disabled={isLoading}
+              />
+              <button
+                style={{
+                  ...styles.sendButton,
+                  ...(isLoading || !inputValue.trim() ? styles.sendButtonDisabled : {})
+                }}
+                onClick={handleSendAgentMessage}
+                disabled={isLoading || !inputValue.trim()}
+              >
+                {isLoading ? 'Sending...' : 'Send'}
+              </button>
+            </div>
+          </>
+        ) : currentThread ? (
+          /* Regular Thread Chat View */
+          <>
+            <div style={styles.chatHeader}>
+              <div style={styles.chatTitle}>{currentThread.title}</div>
+            </div>
+            <div style={styles.messagesContainer}>
+              {messages.map(message => (
+                <div key={message.messageId} style={styles.messageWrapper}>
+                  <div
+                    style={
+                      message.role === 'user'
+                        ? styles.messageUser
+                        : styles.messageAssistant
+                    }
+                  >
+                    {message.content}
+                  </div>
+                </div>
+              ))}
+              {streamingContent && (
+                <div style={styles.messageWrapper}>
+                  <div style={styles.messageAssistant}>{streamingContent}</div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+            <div style={styles.inputArea}>
+              <textarea
+                style={styles.textarea}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+                disabled={isLoading}
+              />
+              <button
+                style={{
+                  ...styles.sendButton,
+                  ...(isLoading || !inputValue.trim() ? styles.sendButtonDisabled : {})
+                }}
+                onClick={handleSendMessage}
+                disabled={isLoading || !inputValue.trim()}
+              >
+                {isLoading ? 'Sending...' : 'Send'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div style={styles.emptyState}>
+            <div>Select a thread, agent, or create a new thread to start chatting</div>
+          </div>
+        )}
       </div>
 
       {/* Settings Modal */}
