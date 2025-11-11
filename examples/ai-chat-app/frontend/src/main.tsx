@@ -1,5 +1,28 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
+import { MsalProvider, useMsal } from '@azure/msal-react';
+import { PublicClientApplication, EventType, EventMessage, AuthenticationResult } from '@azure/msal-browser';
+import { msalConfig, loginRequest } from './authConfig';
+
+// Initialize MSAL instance
+const msalInstance = new PublicClientApplication(msalConfig);
+
+// Handle redirect promise for returning from login
+msalInstance.initialize().then(() => {
+  // Account selection logic is app dependent. Adjust as needed for different use cases.
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length > 0) {
+    msalInstance.setActiveAccount(accounts[0]);
+  }
+
+  msalInstance.addEventCallback((event: EventMessage) => {
+    if (event.eventType === EventType.LOGIN_SUCCESS && event.payload) {
+      const payload = event.payload as AuthenticationResult;
+      const account = payload.account;
+      msalInstance.setActiveAccount(account);
+    }
+  });
+});
 
 // Types
 interface Thread {
@@ -60,9 +83,19 @@ const API_BASE_URL = window.ENV?.BACKEND_URL ||
     ? 'http://localhost:5000' 
     : 'https://aca-ai-chat-backend-ezle7syi.mangosmoke-47a72d95.swedencentral.azurecontainerapps.io');
 
+// Helper to create authenticated headers
+function getAuthHeaders(token: string): HeadersInit {
+  return {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+}
+
 // API functions
-async function fetchThreads(): Promise<Thread[]> {
-  const response = await fetch(`${API_BASE_URL}/api/threads`);
+async function fetchThreads(token: string): Promise<Thread[]> {
+  const response = await fetch(`${API_BASE_URL}/api/threads`, {
+    headers: getAuthHeaders(token),
+  });
   if (!response.ok) throw new Error('Failed to fetch threads');
   return response.json();
 }
@@ -70,8 +103,10 @@ async function fetchThreads(): Promise<Thread[]> {
 // Removed - threads now managed via Agent Service unified API
 
 
-async function fetchMessages(threadId: string): Promise<Message[]> {
-  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`);
+async function fetchMessages(threadId: string, token: string): Promise<Message[]> {
+  const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`, {
+    headers: getAuthHeaders(token),
+  });
   if (!response.ok) throw new Error('Failed to fetch messages');
   return response.json();
 }
@@ -79,8 +114,10 @@ async function fetchMessages(threadId: string): Promise<Message[]> {
 // Removed - using unified message sending in handleSendMessage
 
 
-async function fetchPreferences(): Promise<UserPreferences> {
-  const response = await fetch(`${API_BASE_URL}/api/preferences`);
+async function fetchPreferences(token: string): Promise<UserPreferences> {
+  const response = await fetch(`${API_BASE_URL}/api/preferences`, {
+    headers: getAuthHeaders(token),
+  });
   if (!response.ok) throw new Error('Failed to fetch preferences');
   const prefs = await response.json();
   // Ensure enabledTools exists for backward compatibility
@@ -90,32 +127,37 @@ async function fetchPreferences(): Promise<UserPreferences> {
   return prefs;
 }
 
-async function updatePreferences(preferences: UserPreferences): Promise<UserPreferences> {
+async function updatePreferences(preferences: UserPreferences, token: string): Promise<UserPreferences> {
   const response = await fetch(`${API_BASE_URL}/api/preferences`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(token),
     body: JSON.stringify(preferences)
   });
   if (!response.ok) throw new Error('Failed to update preferences');
   return response.json();
 }
 
-async function fetchMcpServers(): Promise<MCPServer[]> {
-  const response = await fetch(`${API_BASE_URL}/api/mcp-servers`);
+async function fetchMcpServers(token: string): Promise<MCPServer[]> {
+  const response = await fetch(`${API_BASE_URL}/api/mcp-servers`, {
+    headers: getAuthHeaders(token),
+  });
   if (!response.ok) throw new Error('Failed to fetch MCP servers');
   return response.json();
 }
 
 // Agent API functions
-async function fetchAgents(): Promise<Agent[]> {
-  const response = await fetch(`${API_BASE_URL}/api/agents`);
+async function fetchAgents(token: string): Promise<Agent[]> {
+  const response = await fetch(`${API_BASE_URL}/api/agents`, {
+    headers: getAuthHeaders(token),
+  });
   if (!response.ok) throw new Error('Failed to fetch agents');
   return response.json();
 }
 
-async function discoverAgents(): Promise<Agent[]> {
+async function discoverAgents(token: string): Promise<Agent[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/discover`, {
-    method: 'POST'
+    method: 'POST',
+    headers: getAuthHeaders(token),
   });
   if (!response.ok) {
     if (response.status === 503) {
@@ -126,10 +168,10 @@ async function discoverAgents(): Promise<Agent[]> {
   return response.json();
 }
 
-async function importAgent(agentId: string): Promise<Agent> {
+async function importAgent(agentId: string, token: string): Promise<Agent> {
   const response = await fetch(`${API_BASE_URL}/api/agents/import`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(token),
     body: JSON.stringify({ agentId })
   });
   if (!response.ok) throw new Error('Failed to import agent');
@@ -137,16 +179,18 @@ async function importAgent(agentId: string): Promise<Agent> {
   return data.agent;
 }
 
-async function deleteAgent(agentId: string): Promise<void> {
+async function deleteAgent(agentId: string, token: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/agents/${agentId}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: getAuthHeaders(token)
   });
   if (!response.ok) throw new Error('Failed to delete agent');
 }
 
-async function deleteThread(threadId: string): Promise<void> {
+async function deleteThread(threadId: string, token: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: getAuthHeaders(token)
   });
   if (!response.ok) throw new Error('Failed to delete thread');
 }
@@ -159,9 +203,15 @@ async function deleteThread(threadId: string): Promise<void> {
 
 // Main App Component
 function App() {
+  // Authentication hooks
+  const { instance, accounts, inProgress } = useMsal();
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+
+  // Main app state - MUST be at top before any conditional returns
   const [threads, setThreads] = useState<Thread[]>([]);
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
-  const [currentAgentId, setCurrentAgentId] = useState<string | null>(null); // null = using Chat (default agent)
+  const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -188,18 +238,54 @@ function App() {
   // UI state
   const [showAgentsList, setShowAgentsList] = useState(true);
   const [showThreadsList, setShowThreadsList] = useState(true);
+  const [showUserModal, setShowUserModal] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load threads on mount
+  // Check authentication status
   useEffect(() => {
-    loadThreads();
-    loadPreferences();
-    loadMcpServers();
-    loadAgents();
-  }, []);
+    const checkAuth = async () => {
+      if (accounts.length > 0) {
+        setIsAuthenticated(true);
+        // Acquire token silently
+        try {
+          const response = await instance.acquireTokenSilent({
+            ...loginRequest,
+            account: accounts[0],
+          });
+          setAccessToken(response.accessToken);
+        } catch (error) {
+          console.error('Failed to acquire token silently:', error);
+          // If silent acquisition fails, try interactive
+          try {
+            const response = await instance.acquireTokenPopup(loginRequest);
+            setAccessToken(response.accessToken);
+          } catch (popupError) {
+            console.error('Failed to acquire token with popup:', popupError);
+          }
+        }
+      } else {
+        setIsAuthenticated(false);
+        setAccessToken(null);
+      }
+    };
 
-  // Load messages when thread changes
+    if (inProgress === 'none') {
+      checkAuth();
+    }
+  }, [accounts, instance, inProgress]);
+
+  // Load threads on mount - MUST be before conditional return
+  useEffect(() => {
+    if (isAuthenticated && accessToken) {
+      loadThreads();
+      loadPreferences();
+      loadMcpServers();
+      loadAgents();
+    }
+  }, [isAuthenticated, accessToken]);
+
+  // Load messages when thread changes - MUST be before conditional return
   useEffect(() => {
     if (currentThreadId) {
       loadMessages(currentThreadId);
@@ -208,14 +294,57 @@ function App() {
     }
   }, [currentThreadId]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll to bottom when messages change - MUST be before conditional return
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent]);
 
+  // Login handler
+  const handleLogin = () => {
+    instance.loginRedirect(loginRequest).catch((error) => {
+      console.error('Login error:', error);
+    });
+  };
+
+  // Show login screen if not authenticated
+  if (!isAuthenticated || !accessToken) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column',
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        height: '100vh',
+        backgroundColor: '#1a1a1a',
+        color: '#e0e0e0',
+        fontFamily: 'system-ui, -apple-system, sans-serif'
+      }}>
+        <h1 style={{ marginBottom: '2rem' }}>AI Chat Application</h1>
+        <p style={{ marginBottom: '2rem', color: '#999' }}>Please sign in to continue</p>
+        <button
+          onClick={handleLogin}
+          disabled={inProgress !== 'none'}
+          style={{
+            padding: '12px 24px',
+            fontSize: '16px',
+            backgroundColor: '#0078d4',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: inProgress !== 'none' ? 'not-allowed' : 'pointer',
+            opacity: inProgress !== 'none' ? 0.6 : 1
+          }}
+        >
+          {inProgress !== 'none' ? 'Signing in...' : 'Sign in with Microsoft'}
+        </button>
+      </div>
+    );
+  }
+
   async function loadThreads() {
+    if (!accessToken) return;
     try {
-      const data = await fetchThreads();
+      const data = await fetchThreads(accessToken);
       setThreads(data);
     } catch (error) {
       console.error('Error loading threads:', error);
@@ -223,8 +352,9 @@ function App() {
   }
 
   async function loadMessages(threadId: string) {
+    if (!accessToken) return;
     try {
-      const data = await fetchMessages(threadId);
+      const data = await fetchMessages(threadId, accessToken);
       setMessages(data);
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -232,8 +362,9 @@ function App() {
   }
 
   async function loadPreferences() {
+    if (!accessToken) return;
     try {
-      const data = await fetchPreferences();
+      const data = await fetchPreferences(accessToken);
       // Backward compatibility: ensure enabledMcpServers exists
       if (!data.enabledMcpServers) {
         data.enabledMcpServers = [];
@@ -246,8 +377,9 @@ function App() {
   }
 
   async function loadMcpServers() {
+    if (!accessToken) return;
     try {
-      const servers = await fetchMcpServers();
+      const servers = await fetchMcpServers(accessToken);
       setAvailableMcpServers(servers);
     } catch (error) {
       console.error('Error loading MCP servers:', error);
@@ -255,8 +387,9 @@ function App() {
   }
   
   async function loadAgents() {
+    if (!accessToken) return;
     try {
-      const agentList = await fetchAgents();
+      const agentList = await fetchAgents(accessToken);
       setAgents(agentList);
     } catch (error) {
       console.error('Error loading agents:', error);
@@ -288,9 +421,10 @@ function App() {
   // Handler: Delete thread
   async function handleDeleteThread(threadId: string) {
     if (!confirm('Are you sure you want to delete this conversation?')) return;
+    if (!accessToken) return;
 
     try {
-      await deleteThread(threadId);
+      await deleteThread(threadId, accessToken);
       setThreads(threads.filter((t: Thread) => t.threadId !== threadId));
       if (currentThreadId === threadId) {
         handleSelectChat();
@@ -303,6 +437,7 @@ function App() {
 
   async function handleSendMessage() {
     if (!inputValue.trim() || isLoading) return;
+    if (!accessToken) return;
 
     const userContent = inputValue;
     setInputValue('');
@@ -326,7 +461,7 @@ function App() {
       // Send message with agentId (null = use default agent)
       const response = await fetch(`${API_BASE_URL}/api/threads/${threadId}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(accessToken),
         body: JSON.stringify({ 
           content: userContent,
           agentId: currentAgentId // null for default agent
@@ -391,8 +526,9 @@ function App() {
   }
 
   async function handleSavePreferences() {
+    if (!accessToken) return;
     try {
-      const updated = await updatePreferences(editedPreferences);
+      const updated = await updatePreferences(editedPreferences, accessToken);
       setPreferences(updated);
       setShowSettings(false);
       alert('Preferences saved successfully!');
@@ -404,10 +540,11 @@ function App() {
 
   // Agent handlers
   async function handleOpenAgentImport() {
+    if (!accessToken) return;
     setShowAgentImport(true);
     setIsLoadingAgents(true);
     try {
-      const discovered = await discoverAgents();
+      const discovered = await discoverAgents(accessToken);
       setAvailableAgents(discovered);
     } catch (error) {
       console.error('Error discovering agents:', error);
@@ -418,9 +555,10 @@ function App() {
   }
   
   async function handleImportAgent(agentId: string) {
+    if (!accessToken) return;
     setIsImporting(true);
     try {
-      await importAgent(agentId);
+      await importAgent(agentId, accessToken);
       await loadAgents();
       setShowAgentImport(false);
       alert('Agent imported successfully!');
@@ -435,9 +573,10 @@ function App() {
   // Handler: Delete an imported agent
   async function handleDeleteAgent(agentId: string) {
     if (!confirm('Are you sure you want to remove this agent?')) return;
+    if (!accessToken) return;
     
     try {
-      await deleteAgent(agentId);
+      await deleteAgent(agentId, accessToken);
       await loadAgents();
       if (currentAgentId === agentId) {
         handleSelectChat();
@@ -976,6 +1115,69 @@ function App() {
           )}
         </div>
         
+        {/* User Profile Section */}
+        <div style={{
+          marginTop: 'auto',
+          paddingTop: '16px',
+          borderTop: '1px solid #2a2b32'
+        }}>
+          <div
+            style={{
+              padding: '12px',
+              background: '#252526',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              transition: 'background 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}
+            onClick={() => setShowUserModal(true)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#2d2d2d';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = '#252526';
+            }}
+          >
+            <div style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '50%',
+              background: '#0078d4',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontWeight: '600',
+              fontSize: '16px'
+            }}>
+              {accounts[0]?.name?.charAt(0)?.toUpperCase() || '?'}
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <div style={{
+                color: '#e5e7eb',
+                fontSize: '14px',
+                fontWeight: '500',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>
+                {accounts[0]?.name || 'User'}
+              </div>
+              <div style={{
+                color: '#9ca3af',
+                fontSize: '12px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>
+                {accounts[0]?.username || ''}
+              </div>
+            </div>
+          </div>
+        </div>
+        
         <button style={styles.settingsButton} onClick={() => setShowSettings(true)}>
           ⚙️ Settings
         </button>
@@ -1206,6 +1408,120 @@ function App() {
         </div>
       )}
       
+      {/* User Modal */}
+      {showUserModal && (
+        <div style={styles.modal} onClick={() => setShowUserModal(false)}>
+          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>User Profile</div>
+            
+            <div style={{ padding: '24px 0' }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16px',
+                marginBottom: '24px'
+              }}>
+                <div style={{
+                  width: '64px',
+                  height: '64px',
+                  borderRadius: '50%',
+                  background: '#0078d4',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontWeight: '600',
+                  fontSize: '28px'
+                }}>
+                  {accounts[0]?.name?.charAt(0)?.toUpperCase() || '?'}
+                </div>
+                <div>
+                  <div style={{
+                    color: '#e5e7eb',
+                    fontSize: '18px',
+                    fontWeight: '600',
+                    marginBottom: '4px'
+                  }}>
+                    {accounts[0]?.name || 'User'}
+                  </div>
+                  <div style={{
+                    color: '#9ca3af',
+                    fontSize: '14px'
+                  }}>
+                    {accounts[0]?.username || ''}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{
+                background: '#1e1e1e',
+                border: '1px solid #2d2d2d',
+                borderRadius: '8px',
+                padding: '16px',
+                marginBottom: '24px'
+              }}>
+                <div style={{
+                  color: '#9ca3af',
+                  fontSize: '12px',
+                  marginBottom: '8px',
+                  textTransform: 'uppercase',
+                  fontWeight: '600'
+                }}>
+                  Account Details
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <div style={{ color: '#9ca3af', fontSize: '13px' }}>Email</div>
+                    <div style={{ color: '#e5e7eb', fontSize: '14px' }}>
+                      {accounts[0]?.username || 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#9ca3af', fontSize: '13px' }}>Tenant ID</div>
+                    <div style={{
+                      color: '#e5e7eb',
+                      fontSize: '12px',
+                      fontFamily: 'monospace',
+                      wordBreak: 'break-all'
+                    }}>
+                      {accounts[0]?.tenantId || 'N/A'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                style={styles.cancelButton}
+                onClick={() => setShowUserModal(false)}
+              >
+                Close
+              </button>
+              <button
+                style={{
+                  ...styles.saveButton,
+                  background: '#d32f2f'
+                }}
+                onClick={() => {
+                  instance.logoutRedirect({
+                    postLogoutRedirectUri: window.location.origin
+                  });
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#c62828';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#d32f2f';
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Agent Import Modal */}
       {showAgentImport && (
         <div style={styles.modal} onClick={() => setShowAgentImport(false)}>
@@ -1293,6 +1609,8 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
-    <App />
+    <MsalProvider instance={msalInstance}>
+      <App />
+    </MsalProvider>
   </React.StrictMode>
 );

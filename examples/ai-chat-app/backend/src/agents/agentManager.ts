@@ -8,14 +8,15 @@ import { DefaultAzureCredential } from '@azure/identity';
 
 // Agent metadata stored locally
 export interface AgentMetadata {
-  id: string;                     // Internal ID (e.g., "imported-agent-xxx" or "default-agent-xxx")
+  id: string;                     // Internal ID (e.g., "imported-agent-xxx" or "default")
   foundryAgentId?: string;        // Original Foundry agent ID (for imported agents)
   name: string;
   instructions: string;
   model: string;
   importedAt: string;
   foundryProjectEndpoint: string;
-  isDefault?: boolean;            // True for the user's default agent
+  isDefault?: boolean;            // True for the shared default agent
+  userId?: string;                // User who imported this agent (not set for default agent)
 }
 
 // Thread metadata - ONLY stores the association between threads and agents
@@ -23,6 +24,7 @@ export interface AgentMetadata {
 export interface AgentThread {
   id: string;              // Thread ID from Foundry
   agentId: string;         // Which agent this thread is associated with
+  userId: string;          // User who owns this thread
   createdAt: string;       // When the thread was created
   lastMessageAt: string;   // Last activity timestamp
   title: string;           // User-friendly title (auto-generated or user-set)

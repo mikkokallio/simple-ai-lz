@@ -12,7 +12,8 @@ export interface AgentMetadata {
   model: string;
   importedAt: string;
   foundryProjectEndpoint: string;
-  isDefault?: boolean;      // True for the user's default agent
+  isDefault?: boolean;      // True for the shared default agent
+  userId?: string;          // User who imported this agent (not set for default agent)
   partitionKey?: string;     // Same as id for single-partition simplicity
 }
 
@@ -21,6 +22,7 @@ export interface AgentMetadata {
 export interface AgentThread {
   id: string;              // Thread ID from Foundry
   agentId: string;         // Which agent this thread is associated with (partition key)
+  userId: string;          // User who owns this thread
   createdAt: string;       // When the thread was created
   lastMessageAt: string;   // Last activity timestamp
   title: string;           // User-friendly title (auto-generated or user-set)

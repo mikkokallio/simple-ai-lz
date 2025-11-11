@@ -3,13 +3,16 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import session from 'express-session';
+import passport from 'passport';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
-import { FoundryAgentClient } from './agents/foundryClient';
-import { AgentManager, AgentMetadata } from './agents/agentManager';
-import { CosmosAgentManager } from './agents/cosmosAgentManager';
+import { FoundryAgentClient } from './agents/foundryClient.js';
+import { AgentManager, AgentMetadata, AgentThread } from './agents/agentManager.js';
+import { CosmosAgentManager } from './agents/cosmosAgentManager.js';
+import { requireAuth, getUserId, getUserEmail, getUserName } from './auth/authMiddleware.js';
+import './auth/authConfig.js'; // Initialize auth configuration
 
 // Types
 interface Thread {
@@ -180,7 +183,7 @@ async function ensureDefaultAgent() {
   try {
     if (!foundryAgentClient || !agentManager) return;
     
-    const defaultAgentId = `default-agent-${STATIC_USER_ID}`;
+    const defaultAgentId = "default";
     
     // Check if default agent already exists in metadata
     const existingAgent = await agentManager.getAgent(defaultAgentId);
@@ -198,7 +201,7 @@ async function ensureDefaultAgent() {
       console.log(`📝 Creating default agent in Foundry: ${defaultAgentId}`);
       defaultAgent = await foundryAgentClient.createAgent({
         id: defaultAgentId,
-        name: `Default Agent (${STATIC_USER_ID})`,
+        name: "Default",
         instructions: 'You are a helpful AI assistant.',
         model: 'gpt-4o'
       });
@@ -519,16 +522,32 @@ app.use(session({
   cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
+// Initialize Passport for authentication
+app.use(passport.initialize());
+
+console.log('✅ Express app configured with authentication');
+
 // API Routes
 
-// Health check
+// Health check (public endpoint)
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Get all threads (from all agents)
-app.get('/api/threads', async (req: Request, res: Response) => {
+// User info endpoint (authenticated)
+app.get('/api/user', requireAuth, (req: Request, res: Response) => {
+  res.json({
+    userId: getUserId(req),
+    email: getUserEmail(req),
+    name: getUserName(req)
+  });
+});
+
+// Get all threads (from all agents) - PROTECTED
+app.get('/api/threads', requireAuth, async (req: Request, res: Response) => {
   try {
+    const userId = getUserId(req);
+    
     if (!agentManager) {
       return res.json([]);
     }
@@ -536,21 +555,23 @@ app.get('/api/threads', async (req: Request, res: Response) => {
     // Get all agents
     const agents = await agentManager.listAgents();
     
-    // Get threads from all agents
+    // Get threads from all agents, filtered by user
     const allThreads: any[] = [];
     for (const agent of agents) {
-      const agentThreads = await agentManager.listThreads(agent.id);
-      // Add agent info to each thread
+      const agentThreads: AgentThread[] = await agentManager.listThreads(agent.id);
+      // Filter threads by userId and add agent info
       for (const thread of agentThreads) {
-        allThreads.push({
-          threadId: thread.id,
-          title: thread.title || 'New Chat',
-          createdAt: thread.createdAt,
-          updatedAt: thread.lastMessageAt,
-          messageCount: 0, // Not tracked anymore
-          agentId: thread.agentId,
-          isDefaultAgent: agent.isDefault || false
-        });
+        if (thread.userId === userId) {
+          allThreads.push({
+            threadId: thread.id,
+            title: thread.title || 'New Chat',
+            createdAt: thread.createdAt,
+            updatedAt: thread.lastMessageAt,
+            messageCount: 0, // Not tracked anymore
+            agentId: thread.agentId,
+            isDefaultAgent: agent.isDefault || false
+          });
+        }
       }
     }
     
@@ -652,9 +673,10 @@ app.get('/api/threads/:threadId/messages', async (req: Request, res: Response) =
   }
 });
 
-// Send message and get AI response (unified endpoint for both default and imported agents)
-app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) => {
+// Send message and get AI response (unified endpoint for both default and imported agents) - PROTECTED
+app.post('/api/threads/:threadId/messages', requireAuth, async (req: Request, res: Response) => {
   try {
+    const userId = getUserId(req);
     const { threadId } = req.params;
     const { content, agentId } = req.body;
     
@@ -694,10 +716,11 @@ app.post('/api/threads/:threadId/messages', async (req: Request, res: Response) 
       // Create new thread in Foundry
       actualThreadId = await foundryAgentClient.createThread(foundryAgentId);
       
-      // Save thread metadata
+      // Save thread metadata with userId
       await agentManager.saveThread({
         id: actualThreadId,
         agentId: targetAgentId,
+        userId: userId,
         createdAt: new Date().toISOString(),
         lastMessageAt: new Date().toISOString(),
         title: content.slice(0, 50) + (content.length > 50 ? '...' : '')
@@ -816,23 +839,31 @@ app.get('/api/mcp-servers', async (req: Request, res: Response) => {
 // AGENT ENDPOINTS
 // ============================================================================
 
-// Get all imported agents
-app.get('/api/agents', async (req: Request, res: Response) => {
+// Get all imported agents (user-specific) - PROTECTED
+app.get('/api/agents', requireAuth, async (req: Request, res: Response) => {
   try {
+    const userId = getUserId(req);
+    
     if (!agentManager) {
       return res.json([]);
     }
     
     const agents = await agentManager.listAgents();
-    res.json(agents);
+    
+    // Filter: include default agent + user's imported agents
+    const userAgents = agents.filter(agent => 
+      agent.isDefault || agent.userId === userId
+    );
+    
+    res.json(userAgents);
   } catch (error) {
     console.error('Error listing agents:', error);
     res.status(500).json({ error: 'Failed to list agents' });
   }
 });
 
-// Discover agents from Foundry project (for import)
-app.post('/api/agents/discover', async (req: Request, res: Response) => {
+// Discover agents from Foundry project (for import) - PROTECTED
+app.post('/api/agents/discover', requireAuth, async (req: Request, res: Response) => {
   try {
     if (!foundryAgentClient) {
       return res.status(503).json({ 
@@ -841,16 +872,22 @@ app.post('/api/agents/discover', async (req: Request, res: Response) => {
     }
     
     const agents = await foundryAgentClient.listAgents();
-    res.json(agents);
+    
+    // Filter out the "Default" agent from discovery (users get it automatically)
+    const importableAgents = agents.filter((agent: any) => agent.id !== 'default' && agent.name !== 'Default');
+    
+    res.json(importableAgents);
   } catch (error) {
     console.error('Error discovering agents:', error);
     res.status(500).json({ error: 'Failed to discover agents from Foundry' });
   }
 });
 
-// Import an agent
-app.post('/api/agents/import', async (req: Request, res: Response) => {
+// Import an agent - PROTECTED
+app.post('/api/agents/import', requireAuth, async (req: Request, res: Response) => {
   try {
+    const userId = getUserId(req);
+    
     if (!agentManager || !foundryAgentClient) {
       return res.status(503).json({ error: 'Agent service not available' });
     }
@@ -859,6 +896,11 @@ app.post('/api/agents/import', async (req: Request, res: Response) => {
     
     if (!agentId) {
       return res.status(400).json({ error: 'Agent ID is required' });
+    }
+    
+    // Prevent importing the default agent
+    if (agentId === 'default') {
+      return res.status(400).json({ error: 'Cannot import the default agent' });
     }
     
     // Get agent details from Foundry
@@ -871,7 +913,7 @@ app.post('/api/agents/import', async (req: Request, res: Response) => {
     // Use clean display name, but prepend "imported-agent-" to internal ID for tracking
     const internalId = `imported-agent-${agent.id}`;
     
-    // Save to local storage with isDefault: false
+    // Save to local storage with user ID
     await agentManager.importAgent({
       id: internalId,                // Internal ID with prefix
       foundryAgentId: agent.id,      // Original Foundry agent ID
@@ -880,7 +922,8 @@ app.post('/api/agents/import', async (req: Request, res: Response) => {
       model: agent.model,
       importedAt: new Date().toISOString(),
       foundryProjectEndpoint: AI_FOUNDRY_PROJECT_ENDPOINT,
-      isDefault: false
+      isDefault: false,
+      userId: userId                 // Associate with user
     });
     
     res.json({ success: true, agent: { ...agent, id: internalId, name: agent.name } });
@@ -923,9 +966,11 @@ app.get('/api/agents/:agentId/threads', async (req: Request, res: Response) => {
   }
 });
 
-// Create a new thread for an agent
-app.post('/api/agents/:agentId/threads', async (req: Request, res: Response) => {
+// Create a new thread for an agent - PROTECTED
+app.post('/api/agents/:agentId/threads', requireAuth, async (req: Request, res: Response) => {
   try {
+    const userId = getUserId(req);
+    
     if (!foundryAgentClient || !agentManager) {
       return res.status(503).json({ error: 'Agent service not available' });
     }
@@ -941,11 +986,12 @@ app.post('/api/agents/:agentId/threads', async (req: Request, res: Response) => 
     // Create thread in Foundry
     const threadId = await foundryAgentClient.createThread(agentId);
     
-    // Save thread metadata
+    // Save thread metadata with userId
     const now = new Date().toISOString();
     await agentManager.saveThread({
       id: threadId,
       agentId: agentId,
+      userId: userId,
       createdAt: now,
       lastMessageAt: now,
       title: 'New conversation'
