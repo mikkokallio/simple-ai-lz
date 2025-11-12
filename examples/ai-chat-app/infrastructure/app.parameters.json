@@ -40,6 +40,15 @@
     },
     "backendImage": {
       "value": "acrezle7syiailz.azurecr.io/ai-chat-backend:v2"
+    },
+    "entraClientId": {
+      "value": ""
+    },
+    "entraTenantId": {
+      "value": ""
+    },
+    "corsAllowedOrigins": {
+      "value": ""
     }
   }
 }

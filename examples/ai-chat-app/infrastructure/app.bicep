@@ -52,6 +52,15 @@ param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-hellowor
 @description('Backend container image')
 param backendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('Entra ID Client ID for frontend authentication')
+param entraClientId string = ''
+
+@description('Entra ID Tenant ID for frontend authentication')
+param entraTenantId string = ''
+
+@description('Allowed CORS origins for backend API (comma-separated). If empty, will default to frontend URL.')
+param corsAllowedOrigins string = ''
+
 // ============================================================================
 // VARIABLES
 // ============================================================================
@@ -66,6 +75,11 @@ var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Cosmos DB Built-in Data Contributor role (00000000-0000-0000-0000-000000000002)
 // Note: This is a Cosmos DB-specific RBAC role, not an Azure RBAC role
 var cosmosDataContributorRoleDefinitionId = '00000000-0000-0000-0000-000000000002'
+
+// Determine CORS allowed origins - use parameter if provided, otherwise default to frontend URL
+// Note: Frontend app needs to be referenced, so we construct its URL
+var frontendUrl = 'https://${frontendAppName}.${split(split(containerAppsEnvironmentId, '/')[8], '.')[0]}.azurecontainerapps.io'
+var corsOrigins = !empty(corsAllowedOrigins) ? split(corsAllowedOrigins, ',') : [frontendUrl]
 
 // ============================================================================
 // BACKEND CONTAINER APP
@@ -110,6 +124,23 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
         targetPort: 5000
         transport: 'auto'
         allowInsecure: false
+        corsPolicy: {
+          allowedOrigins: corsOrigins
+          allowedMethods: [
+            'GET'
+            'POST'
+            'PUT'
+            'DELETE'
+            'OPTIONS'
+          ]
+          allowedHeaders: [
+            '*'
+          ]
+          exposeHeaders: [
+            '*'
+          ]
+          allowCredentials: true
+        }
       }
     }
     template: {
@@ -238,6 +269,22 @@ resource frontendApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsightsConnectionString
+            }
+            {
+              name: 'VITE_ENTRA_CLIENT_ID'
+              value: entraClientId
+            }
+            {
+              name: 'VITE_ENTRA_TENANT_ID'
+              value: entraTenantId
+            }
+            {
+              name: 'VITE_ENTRA_REDIRECT_URI'
+              value: 'https://${frontendAppName}.${split(split(containerAppsEnvironmentId, '/')[8], '.')[0]}.azurecontainerapps.io'
+            }
+            {
+              name: 'VITE_API_URL'
+              value: 'https://${backendApp.properties.configuration.ingress.fqdn}'
             }
           ]
         }

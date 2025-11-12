@@ -27,7 +27,7 @@ This guide covers deploying the AI Chat Application to Azure Container Apps.
 # Set these to your values
 export SUBSCRIPTION_ID="your-subscription-id"
 export RESOURCE_GROUP="rg-ai-chat"
-export LOCATION="eastus"
+export LOCATION="swedencentral"
 export ACR_NAME="acraichat"  # Must be globally unique
 export STORAGE_ACCOUNT="staichat"  # Must be globally unique
 export OPENAI_NAME="oai-ai-chat"

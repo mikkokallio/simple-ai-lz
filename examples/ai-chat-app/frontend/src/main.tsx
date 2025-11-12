@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import { MsalProvider, useMsal } from '@azure/msal-react';
 import { PublicClientApplication, EventType, EventMessage, AuthenticationResult } from '@azure/msal-browser';
-import { msalConfig, loginRequest } from './authConfig';
+import { msalConfig, loginRequest, apiRequest } from './authConfig';
 
 // Initialize MSAL instance
 const msalInstance = new PublicClientApplication(msalConfig);
@@ -43,10 +43,7 @@ interface Message {
   timestamp: string;
 }
 
-interface MCPServer {
-  id: string;
-  name: string;
-}
+// MCPServer interface removed - deprecated functionality
 
 interface Agent {
   id: string;
@@ -56,17 +53,6 @@ interface Agent {
   importedAt: string;
   foundryProjectEndpoint: string;
   isDefault?: boolean;  // True for user's default agent
-}
-
-// Removed - AgentMessage interface no longer used in unified architecture
-
-interface UserPreferences {
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  systemPrompt: string;
-  enabledTools: string[];
-  enabledMcpServers: string[];
 }
 
 // API configuration - direct backend URL (no nginx proxy)
@@ -112,38 +98,7 @@ async function fetchMessages(threadId: string, token: string): Promise<Message[]
 }
 
 // Removed - using unified message sending in handleSendMessage
-
-
-async function fetchPreferences(token: string): Promise<UserPreferences> {
-  const response = await fetch(`${API_BASE_URL}/api/preferences`, {
-    headers: getAuthHeaders(token),
-  });
-  if (!response.ok) throw new Error('Failed to fetch preferences');
-  const prefs = await response.json();
-  // Ensure enabledTools exists for backward compatibility
-  if (!prefs.enabledTools) {
-    prefs.enabledTools = ['regex_execute', 'calculate'];
-  }
-  return prefs;
-}
-
-async function updatePreferences(preferences: UserPreferences, token: string): Promise<UserPreferences> {
-  const response = await fetch(`${API_BASE_URL}/api/preferences`, {
-    method: 'PUT',
-    headers: getAuthHeaders(token),
-    body: JSON.stringify(preferences)
-  });
-  if (!response.ok) throw new Error('Failed to update preferences');
-  return response.json();
-}
-
-async function fetchMcpServers(token: string): Promise<MCPServer[]> {
-  const response = await fetch(`${API_BASE_URL}/api/mcp-servers`, {
-    headers: getAuthHeaders(token),
-  });
-  if (!response.ok) throw new Error('Failed to fetch MCP servers');
-  return response.json();
-}
+// Preferences and MCP functions removed - deprecated functionality
 
 // Agent API functions
 async function fetchAgents(token: string): Promise<Agent[]> {
@@ -216,17 +171,7 @@ function App() {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
-  const [preferences, setPreferences] = useState<UserPreferences>({
-    model: 'gpt-4o',
-    temperature: 1,
-    maxTokens: 2000,
-    systemPrompt: 'You are a helpful AI assistant.',
-    enabledTools: ['regex_execute', 'calculate', 'get_datetime'],
-    enabledMcpServers: []
-  });
-  const [editedPreferences, setEditedPreferences] = useState<UserPreferences>(preferences);
-  const [availableMcpServers, setAvailableMcpServers] = useState<MCPServer[]>([]);
+  // Settings functionality removed - deprecated
   
   // Agent state
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -247,18 +192,33 @@ function App() {
     const checkAuth = async () => {
       if (accounts.length > 0) {
         setIsAuthenticated(true);
-        // Acquire token silently
+        // Acquire token silently for backend API (not Microsoft Graph)
         try {
           const response = await instance.acquireTokenSilent({
-            ...loginRequest,
+            ...apiRequest,  // Use API scopes, not Graph scopes
             account: accounts[0],
           });
           setAccessToken(response.accessToken);
+          console.log('✅ API Token acquired successfully');
+          console.log('   Scopes requested:', apiRequest.scopes);
+          console.log('   Scopes granted:', response.scopes);
+          console.log('   Token preview:', response.accessToken.substring(0, 100) + '...');
+          
+          // Decode token to check audience (for debugging)
+          try {
+            const tokenParts = response.accessToken.split('.');
+            const payload = JSON.parse(atob(tokenParts[1]));
+            console.log('   Token audience (aud):', payload.aud);
+            console.log('   Token version (ver):', payload.ver);
+            console.log('   Token scopes (scp):', payload.scp);
+          } catch (e) {
+            console.warn('   Could not decode token for debugging');
+          }
         } catch (error) {
           console.error('Failed to acquire token silently:', error);
           // If silent acquisition fails, try interactive
           try {
-            const response = await instance.acquireTokenPopup(loginRequest);
+            const response = await instance.acquireTokenPopup(apiRequest);  // Use API scopes
             setAccessToken(response.accessToken);
           } catch (popupError) {
             console.error('Failed to acquire token with popup:', popupError);
@@ -279,8 +239,8 @@ function App() {
   useEffect(() => {
     if (isAuthenticated && accessToken) {
       loadThreads();
-      loadPreferences();
-      loadMcpServers();
+      // loadPreferences();  // DEPRECATED - removed
+      // loadMcpServers();   // DEPRECATED - removed
       loadAgents();
     }
   }, [isAuthenticated, accessToken]);
@@ -361,30 +321,7 @@ function App() {
     }
   }
 
-  async function loadPreferences() {
-    if (!accessToken) return;
-    try {
-      const data = await fetchPreferences(accessToken);
-      // Backward compatibility: ensure enabledMcpServers exists
-      if (!data.enabledMcpServers) {
-        data.enabledMcpServers = [];
-      }
-      setPreferences(data);
-      setEditedPreferences(data);
-    } catch (error) {
-      console.error('Error loading preferences:', error);
-    }
-  }
-
-  async function loadMcpServers() {
-    if (!accessToken) return;
-    try {
-      const servers = await fetchMcpServers(accessToken);
-      setAvailableMcpServers(servers);
-    } catch (error) {
-      console.error('Error loading MCP servers:', error);
-    }
-  }
+  // Load functions for preferences and MCP removed - deprecated functionality
   
   async function loadAgents() {
     if (!accessToken) return;
@@ -525,18 +462,7 @@ function App() {
     }
   }
 
-  async function handleSavePreferences() {
-    if (!accessToken) return;
-    try {
-      const updated = await updatePreferences(editedPreferences, accessToken);
-      setPreferences(updated);
-      setShowSettings(false);
-      alert('Preferences saved successfully!');
-    } catch (error) {
-      console.error('Error saving preferences:', error);
-      alert('Failed to save preferences');
-    }
-  }
+  // handleSavePreferences removed - deprecated functionality
 
   // Agent handlers
   async function handleOpenAgentImport() {
@@ -613,6 +539,10 @@ function App() {
       .threadList::-webkit-scrollbar-thumb:hover,
       .collapsibleContent::-webkit-scrollbar-thumb:hover {
         background: #4a4b52;
+      }
+      .collapsibleContent {
+        max-height: 300px;
+        overflow-y: auto;
       }
     `,
     container: {
@@ -966,7 +896,7 @@ function App() {
   };
 
   const currentThread = threads.find((t: Thread) => t.threadId === currentThreadId);
-  const importedAgents = agents.filter((a: Agent) => !a.isDefault);
+  const importedAgents = agents; // All agents from /api/agents are imported (excluding Default)
   const defaultAgentThreads = threads.filter((t: Thread) => t.isDefaultAgent);
   const importedAgentThreads = threads.filter((t: Thread) => !t.isDefaultAgent);
 
@@ -1178,9 +1108,7 @@ function App() {
           </div>
         </div>
         
-        <button style={styles.settingsButton} onClick={() => setShowSettings(true)}>
-          ⚙️ Settings
-        </button>
+        {/* Settings button removed - deprecated functionality */}
       </div>
 
       {/* Main Chat Area - Unified for all agents */}
@@ -1244,169 +1172,7 @@ function App() {
         </div>
       </div>
 
-      {/* Settings Modal */}
-      {showSettings && (
-        <div style={styles.modal} onClick={() => setShowSettings(false)}>
-          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalHeader}>Settings</div>
-            
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Model</label>
-              <input
-                style={styles.input}
-                type="text"
-                value={editedPreferences.model}
-                onChange={(e) => setEditedPreferences({ ...editedPreferences, model: e.target.value })}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Temperature (0-2): {editedPreferences.temperature}</label>
-              <input
-                style={styles.input}
-                type="range"
-                min="0"
-                max="2"
-                step="0.1"
-                value={editedPreferences.temperature}
-                onChange={(e) => setEditedPreferences({ ...editedPreferences, temperature: parseFloat(e.target.value) })}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Max Tokens</label>
-              <input
-                style={styles.input}
-                type="number"
-                min="1"
-                max="16000"
-                value={editedPreferences.maxTokens}
-                onChange={(e) => setEditedPreferences({ ...editedPreferences, maxTokens: parseInt(e.target.value) })}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>System Prompt</label>
-              <textarea
-                style={styles.textareaLarge}
-                value={editedPreferences.systemPrompt}
-                onChange={(e) => setEditedPreferences({ ...editedPreferences, systemPrompt: e.target.value })}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Enabled Tools</label>
-              <div style={styles.toolsList}>
-                <label style={styles.toolItem}>
-                  <input
-                    type="checkbox"
-                    checked={(editedPreferences.enabledTools || []).includes('regex_execute')}
-                    onChange={(e) => {
-                      const currentTools = editedPreferences.enabledTools || [];
-                      const tools = e.target.checked
-                        ? [...currentTools, 'regex_execute']
-                        : currentTools.filter(t => t !== 'regex_execute');
-                      setEditedPreferences({ ...editedPreferences, enabledTools: tools });
-                    }}
-                    style={styles.checkbox}
-                  />
-                  <span style={styles.toolName}>
-                    Regex Execute
-                  </span>
-                  <span style={styles.toolDescription}>
-                    AI can run regular expressions for pattern matching and text extraction
-                  </span>
-                </label>
-                
-                <label style={styles.toolItem}>
-                  <input
-                    type="checkbox"
-                    checked={(editedPreferences.enabledTools || []).includes('calculate')}
-                    onChange={(e) => {
-                      const currentTools = editedPreferences.enabledTools || [];
-                      const tools = e.target.checked
-                        ? [...currentTools, 'calculate']
-                        : currentTools.filter(t => t !== 'calculate');
-                      setEditedPreferences({ ...editedPreferences, enabledTools: tools });
-                    }}
-                    style={styles.checkbox}
-                  />
-                  <span style={styles.toolName}>
-                    Calculator
-                  </span>
-                  <span style={styles.toolDescription}>
-                    AI can perform mathematical calculations and evaluate expressions
-                  </span>
-                </label>
-                
-                <label style={styles.toolItem}>
-                  <input
-                    type="checkbox"
-                    checked={(editedPreferences.enabledTools || []).includes('get_datetime')}
-                    onChange={(e) => {
-                      const currentTools = editedPreferences.enabledTools || [];
-                      const tools = e.target.checked
-                        ? [...currentTools, 'get_datetime']
-                        : currentTools.filter(t => t !== 'get_datetime');
-                      setEditedPreferences({ ...editedPreferences, enabledTools: tools });
-                    }}
-                    style={styles.checkbox}
-                  />
-                  <span style={styles.toolName}>
-                    Date & Time
-                  </span>
-                  <span style={styles.toolDescription}>
-                    AI can get current date and time in UTC or specific timezones
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            {/* MCP Servers Section */}
-            {availableMcpServers.length > 0 && (
-              <div style={styles.formGroup}>
-                <label style={styles.label}>MCP Servers</label>
-                <div style={styles.toolsList}>
-                  {availableMcpServers.map(server => (
-                    <label key={server.id} style={styles.toolItem}>
-                      <input
-                        type="checkbox"
-                        checked={(editedPreferences.enabledMcpServers || []).includes(server.id)}
-                        onChange={(e) => {
-                          const currentServers = editedPreferences.enabledMcpServers || [];
-                          const servers = e.target.checked
-                            ? [...currentServers, server.id]
-                            : currentServers.filter(s => s !== server.id);
-                          setEditedPreferences({ ...editedPreferences, enabledMcpServers: servers });
-                        }}
-                        style={styles.checkbox}
-                      />
-                      <span style={styles.toolName}>
-                        {server.name}
-                      </span>
-                      <span style={styles.toolDescription}>
-                        AI can use this external service for additional capabilities
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div style={styles.modalButtons}>
-              <button style={styles.saveButton} onClick={handleSavePreferences}>
-                Save
-              </button>
-              <button style={styles.cancelButton} onClick={() => {
-                setEditedPreferences(preferences);
-                setShowSettings(false);
-              }}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Settings Modal - Removed (deprecated functionality) */}
       
       {/* User Modal */}
       {showUserModal && (

@@ -1,10 +1,22 @@
 // MSAL configuration for Azure Entra ID authentication
 import { Configuration, LogLevel } from '@azure/msal-browser';
 
-// Get configuration from environment variables
-const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID;
-const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID;
-const redirectUri = import.meta.env.VITE_ENTRA_REDIRECT_URI || window.location.origin;
+// Extend Window interface for runtime config
+declare global {
+  interface Window {
+    APP_CONFIG?: {
+      ENTRA_CLIENT_ID: string;
+      ENTRA_TENANT_ID: string;
+      ENTRA_REDIRECT_URI: string;
+      API_URL: string;
+    };
+  }
+}
+
+// Get configuration from runtime config (preferred) or build-time env vars (fallback)
+const clientId = window.APP_CONFIG?.ENTRA_CLIENT_ID || import.meta.env.VITE_ENTRA_CLIENT_ID;
+const tenantId = window.APP_CONFIG?.ENTRA_TENANT_ID || import.meta.env.VITE_ENTRA_TENANT_ID;
+const redirectUri = window.APP_CONFIG?.ENTRA_REDIRECT_URI || import.meta.env.VITE_ENTRA_REDIRECT_URI || window.location.origin;
 
 // Validate required configuration
 if (!clientId || !tenantId) {
@@ -57,9 +69,9 @@ export const loginRequest = {
   scopes: ['openid', 'profile', 'email', 'User.Read'],
 };
 
-// Scopes for accessing the backend API
+// Scopes for accessing the backend API - use the specific scope that exists
 export const apiRequest = {
-  scopes: [`api://${clientId}/access_as_user`],
+  scopes: [`api://${clientId}/user_impersonation`],
 };
 
 console.log('✅ MSAL configuration loaded');

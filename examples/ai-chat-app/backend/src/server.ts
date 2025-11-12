@@ -1,9 +1,6 @@
-import express, { Request, Response } from 'express';
-import cors from 'cors';
+import express, { Response } from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import session from 'express-session';
-import passport from 'passport';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
 import OpenAI from 'openai';
@@ -11,8 +8,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { FoundryAgentClient } from './agents/foundryClient.js';
 import { AgentManager, AgentMetadata, AgentThread } from './agents/agentManager.js';
 import { CosmosAgentManager } from './agents/cosmosAgentManager.js';
-import { requireAuth, getUserId, getUserEmail, getUserName } from './auth/authMiddleware.js';
-import './auth/authConfig.js'; // Initialize auth configuration
+import { requireAuth, getUserId, Request } from './auth/jwtAuthMiddleware.js';
+// JWT Bearer token validation for SPA + API architecture
+// Frontend uses MSAL to acquire tokens, backend validates them
 
 // Types
 interface Thread {
@@ -59,7 +57,7 @@ const AI_FOUNDRY_KEY = process.env.AI_FOUNDRY_KEY || '';
 const AI_FOUNDRY_PROJECT_ENDPOINT = process.env.AI_FOUNDRY_PROJECT_ENDPOINT || '';
 const COSMOS_ENDPOINT = process.env.COSMOS_ENDPOINT || '';
 const COSMOS_DATABASE_NAME = process.env.COSMOS_DATABASE_NAME || 'agent-metadata';
-const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-secret-change-me';
+// No session secret needed - Easy Auth handles session management
 
 
 // Parse MCP servers from environment variable
@@ -168,9 +166,6 @@ async function initializeAgentClient() {
       return;
     }
     
-    // Create default agent if it doesn't exist
-    await ensureDefaultAgent();
-    
     console.log('✅ Foundry Agent Client initialized successfully');
   } catch (error) {
     console.error('❌ Failed to initialize Foundry Agent Client:', error);
@@ -178,51 +173,29 @@ async function initializeAgentClient() {
   }
 }
 
-// Ensure default agent exists in Foundry
-async function ensureDefaultAgent() {
+// Helper function to find the Default agent by name
+async function getDefaultAgent(): Promise<{ agentId: string; foundryAgentId: string } | null> {
   try {
-    if (!foundryAgentClient || !agentManager) return;
+    if (!foundryAgentClient || !agentManager) return null;
     
-    const defaultAgentId = "default";
-    
-    // Check if default agent already exists in metadata
-    const existingAgent = await agentManager.getAgent(defaultAgentId);
-    if (existingAgent) {
-      console.log(`✅ Default agent already exists: ${defaultAgentId}`);
-      return;
-    }
-    
-    // Check if agent exists in Foundry
+    // Get all agents from Foundry
     const foundryAgents = await foundryAgentClient.listAgents();
-    let defaultAgent = foundryAgents.find((a: any) => a.id === defaultAgentId);
+    
+    // Find agent with name "Default" (case-sensitive)
+    const defaultAgent = foundryAgents.find((a: any) => a.name === 'Default');
     
     if (!defaultAgent) {
-      // Create default agent in Foundry
-      console.log(`📝 Creating default agent in Foundry: ${defaultAgentId}`);
-      defaultAgent = await foundryAgentClient.createAgent({
-        id: defaultAgentId,
-        name: "Default",
-        instructions: 'You are a helpful AI assistant.',
-        model: 'gpt-4o'
-      });
+      console.error('⚠️  No agent named "Default" found in Foundry. Please create one manually.');
+      return null;
     }
     
-    // Save to metadata with isDefault flag
-    await agentManager.importAgent({
-      id: defaultAgent.id,
-      foundryAgentId: defaultAgent.id,  // For default agent, internal ID = Foundry ID
-      name: defaultAgent.name,
-      instructions: defaultAgent.instructions,
-      model: defaultAgent.model,
-      importedAt: new Date().toISOString(),
-      foundryProjectEndpoint: AI_FOUNDRY_PROJECT_ENDPOINT,
-      isDefault: true
-    });
-    
-    console.log(`✅ Default agent created: ${defaultAgentId}`);
+    return {
+      agentId: defaultAgent.id,
+      foundryAgentId: defaultAgent.id
+    };
   } catch (error) {
-    console.error('⚠️  Failed to create default agent:', error);
-    // Don't throw - continue with initialization
+    console.error('⚠️  Failed to get default agent:', error);
+    return null;
   }
 }
 
@@ -509,23 +482,14 @@ async function getDatetime(timezone?: string): Promise<string> {
 const app = express();
 
 app.use(helmet());
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
+// CORS is handled by Container Apps ingress - no need for app-level CORS middleware
 app.use(morgan('combined'));
 app.use(express.json());
-app.use(session({
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: true,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
-}));
+// No session or passport needed - Easy Auth handles everything at ingress level
 
-// Initialize Passport for authentication
-app.use(passport.initialize());
-
-console.log('✅ Express app configured with authentication');
+console.log('✅ Express app configured with Easy Auth');
+console.log('   Authentication handled by Container Apps');
+console.log('   User info available in X-MS-CLIENT-PRINCIPAL header');
 
 // API Routes
 
@@ -538,8 +502,8 @@ app.get('/api/health', (req: Request, res: Response) => {
 app.get('/api/user', requireAuth, (req: Request, res: Response) => {
   res.json({
     userId: getUserId(req),
-    email: getUserEmail(req),
-    name: getUserName(req)
+    email: req.user?.email || 'unknown',
+    name: req.user?.name || 'unknown'
   });
 });
 
@@ -693,14 +657,19 @@ app.post('/api/threads/:threadId/messages', requireAuth, async (req: Request, re
     let foundryAgentId: string;
     
     if (!targetAgentId) {
-      // Find default agent
-      const agents = await agentManager.listAgents();
-      const defaultAgent = agents.find((a: AgentMetadata) => a.isDefault);
+      // Find the Default agent by name
+      const defaultAgent = await getDefaultAgent();
+      
       if (!defaultAgent) {
-        return res.status(500).json({ error: 'Default agent not found' });
+        return res.status(500).json({ 
+          error: 'Default agent not found. Please create an agent named "Default" in Azure AI Foundry.' 
+        });
       }
-      targetAgentId = defaultAgent.id;
-      foundryAgentId = (defaultAgent as AgentMetadata).foundryAgentId || defaultAgent.id;
+      
+      targetAgentId = defaultAgent.agentId;
+      foundryAgentId = defaultAgent.foundryAgentId;
+      
+      console.log(`💬 Using default agent for chat (Foundry ID: ${foundryAgentId})`);
     } else {
       // Look up the agent to get the Foundry agent ID
       const agent = await agentManager.getAgent(targetAgentId);
@@ -708,6 +677,8 @@ app.post('/api/threads/:threadId/messages', requireAuth, async (req: Request, re
         return res.status(404).json({ error: 'Agent not found' });
       }
       foundryAgentId = (agent as AgentMetadata).foundryAgentId || agent.id;
+      
+      console.log(`🤖 Using imported agent: ${targetAgentId} (Foundry ID: ${foundryAgentId})`);
     }
     
     // Check if this is a new thread (threadId === 'new')
@@ -844,18 +815,38 @@ app.get('/api/agents', requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = getUserId(req);
     
-    if (!agentManager) {
+    if (!agentManager || !foundryAgentClient) {
       return res.json([]);
     }
     
-    const agents = await agentManager.listAgents();
-    
-    // Filter: include default agent + user's imported agents
-    const userAgents = agents.filter(agent => 
-      agent.isDefault || agent.userId === userId
+    // Get user's imported agents (personal workspace)
+    const importedAgents = await agentManager.listAgents();
+    const userImportedAgents = importedAgents.filter((agent: AgentMetadata) => 
+      agent.userId === userId && 
+      agent.foundryAgentId !== 'default' && 
+      agent.name !== 'Default'
     );
     
-    res.json(userAgents);
+    // Get full details from Foundry for each imported agent
+    const foundryAgents = await foundryAgentClient.listAgents();
+    
+    const agentsWithDetails = userImportedAgents.map((imported: AgentMetadata) => {
+      const foundryAgent = foundryAgents.find((fa: any) => fa.id === imported.foundryAgentId);
+      
+      return {
+        id: imported.foundryAgentId || imported.id,
+        name: foundryAgent?.name || imported.name,
+        description: foundryAgent?.instructions?.substring(0, 100),
+        model: foundryAgent?.model || imported.model,
+        instructions: foundryAgent?.instructions,
+        isImported: true,
+        isDefault: false,
+        importedAt: imported.importedAt,
+        foundryProjectEndpoint: AI_FOUNDRY_PROJECT_ENDPOINT
+      };
+    });
+    
+    res.json(agentsWithDetails);
   } catch (error) {
     console.error('Error listing agents:', error);
     res.status(500).json({ error: 'Failed to list agents' });

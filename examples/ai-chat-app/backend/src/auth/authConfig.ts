@@ -16,7 +16,8 @@ function validateEntraConfig(): EntraConfig {
   const tenantId = process.env.ENTRA_TENANT_ID;
   const clientId = process.env.ENTRA_CLIENT_ID;
   const clientSecret = process.env.ENTRA_CLIENT_SECRET;
-  const audience = process.env.ENTRA_AUDIENCE || clientId; // Default to clientId
+  // Accept api://CLIENT_ID format for custom scopes like user_impersonation
+  const audience = process.env.ENTRA_AUDIENCE || `api://${clientId}`;
   const issuer = process.env.ENTRA_ISSUER || `https://login.microsoftonline.com/${tenantId}/v2.0`;
 
   const missing: string[] = [];
@@ -52,7 +53,7 @@ export const bearerStrategyOptions = {
   issuer: entraConfig.issuer,
   validateIssuer: true,
   passReqToCallback: false,
-  loggingLevel: process.env.NODE_ENV === 'development' ? 'info' : 'error',
+  loggingLevel: 'info', // Always enable detailed logging for debugging
   // Optional: Allow tokens from multiple tenants (set to false for single-tenant)
   allowMultiAudiencesInToken: false,
 };
@@ -60,4 +61,5 @@ export const bearerStrategyOptions = {
 console.log('✅ Entra ID authentication configured');
 console.log(`   Tenant: ${entraConfig.tenantId}`);
 console.log(`   Client: ${entraConfig.clientId}`);
+console.log(`   Audience: ${entraConfig.audience}`);
 console.log(`   Issuer: ${entraConfig.issuer}`);
