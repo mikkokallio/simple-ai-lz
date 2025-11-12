@@ -513,6 +513,13 @@ function App() {
     }
   }
 
+  // Handler: Create a new thread
+  function handleNewThread() {
+    setCurrentThreadId(null);
+    setMessages([]);
+    setStreamingContent('');
+  }
+
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -520,7 +527,7 @@ function App() {
     }
   };
 
-  // Styles - ChatGPT-like with OCR app colors
+  // Styles - Azure Foundry-inspired dark theme
   const styles = {
     scrollbar: `
       .threadList::-webkit-scrollbar,
@@ -529,16 +536,16 @@ function App() {
       }
       .threadList::-webkit-scrollbar-track,
       .collapsibleContent::-webkit-scrollbar-track {
-        background: #1a1b1e;
+        background: #1e1e1e;
       }
       .threadList::-webkit-scrollbar-thumb,
       .collapsibleContent::-webkit-scrollbar-thumb {
-        background: #3a3b42;
+        background: #3e3e42;
         border-radius: 4px;
       }
       .threadList::-webkit-scrollbar-thumb:hover,
       .collapsibleContent::-webkit-scrollbar-thumb:hover {
-        background: #4a4b52;
+        background: #4e4e52;
       }
       .collapsibleContent {
         max-height: 300px;
@@ -549,32 +556,32 @@ function App() {
       display: 'flex',
       height: '100vh',
       overflow: 'hidden',
-      background: '#fafafa',
+      background: '#252526',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
     } as React.CSSProperties,
     sidebar: {
       width: '280px',
-      background: '#202123',
+      background: '#1e1e1e',
       display: 'flex',
       flexDirection: 'column',
-      color: '#ffffff'
+      color: '#cccccc'
     } as React.CSSProperties,
     sidebarHeader: {
       padding: '12px',
-      borderBottom: '1px solid #4a4a4f'
+      borderBottom: '1px solid #3e3e42'
     } as React.CSSProperties,
     sidebarTitle: {
       fontSize: '14px',
       fontWeight: '600',
-      color: '#ececf1',
+      color: '#cccccc',
       marginBottom: '12px'
     } as React.CSSProperties,
     newThreadButton: {
       width: '100%',
       padding: '12px',
       background: 'transparent',
-      color: '#ffffff',
-      border: '1px solid #565869',
+      color: '#cccccc',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       cursor: 'pointer',
       fontSize: '14px',
@@ -585,11 +592,11 @@ function App() {
       gap: '8px',
       transition: 'all 0.2s',
       hover: {
-        background: '#2a2b32'
+        background: '#2d2d30'
       }
     } as React.CSSProperties,
     newThreadButtonHover: {
-      background: '#2a2b32'
+      background: '#2d2d30'
     } as React.CSSProperties,
     threadList: {
       flex: 1,
@@ -607,18 +614,18 @@ function App() {
       justifyContent: 'space-between',
       alignItems: 'center',
       transition: 'background 0.2s',
-      color: '#ececf1'
+      color: '#cccccc'
     } as React.CSSProperties,
     threadItemHover: {
-      background: '#2a2b32'
+      background: '#2d2d30'
     } as React.CSSProperties,
     threadItemActive: {
-      background: '#343541',
+      background: '#37373d',
       borderLeft: '3px solid #0078d4'
     } as React.CSSProperties,
     threadTitle: {
       fontSize: '14px',
-      color: '#ececf1',
+      color: '#cccccc',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
@@ -627,9 +634,9 @@ function App() {
     } as React.CSSProperties,
     threadTitleInput: {
       fontSize: '14px',
-      color: '#ececf1',
-      background: '#2a2b32',
-      border: '1px solid #565869',
+      color: '#cccccc',
+      background: '#2d2d30',
+      border: '1px solid #3e3e42',
       borderRadius: '4px',
       padding: '4px 8px',
       flex: 1,
@@ -654,8 +661,8 @@ function App() {
       padding: '12px',
       margin: '8px',
       background: 'transparent',
-      color: '#ececf1',
-      border: '1px solid #565869',
+      color: '#cccccc',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       cursor: 'pointer',
       fontSize: '14px',
@@ -669,17 +676,17 @@ function App() {
       flex: 1,
       display: 'flex',
       flexDirection: 'column',
-      background: '#ffffff'
+      background: '#252526'
     } as React.CSSProperties,
     chatHeader: {
       padding: '16px 24px',
-      borderBottom: '1px solid #e5e7eb',
-      background: '#ffffff'
+      borderBottom: '1px solid #3e3e42',
+      background: '#2d2d30'
     } as React.CSSProperties,
     chatTitle: {
       fontSize: '18px',
       fontWeight: '600',
-      color: '#202123'
+      color: '#cccccc'
     } as React.CSSProperties,
     messagesContainer: {
       flex: 1,
@@ -709,8 +716,8 @@ function App() {
       alignSelf: 'flex-start',
       maxWidth: '70%',
       padding: '12px 16px',
-      background: '#f3f4f6',
-      color: '#1f2937',
+      background: '#2d2d30',
+      color: '#cccccc',
       borderRadius: '12px',
       fontSize: '14px',
       lineHeight: '1.5',
@@ -718,21 +725,23 @@ function App() {
     } as React.CSSProperties,
     inputArea: {
       padding: '16px 24px',
-      borderTop: '1px solid #d1d5db',
-      background: '#ffffff',
+      borderTop: '1px solid #3e3e42',
+      background: '#252526',
       display: 'flex',
       gap: '12px'
     } as React.CSSProperties,
     textarea: {
       flex: 1,
       padding: '12px',
-      border: '1px solid #d1d5db',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       fontSize: '14px',
       resize: 'none',
       minHeight: '50px',
       maxHeight: '150px',
-      fontFamily: 'inherit'
+      fontFamily: 'inherit',
+      background: '#1e1e1e',
+      color: '#cccccc'
     } as React.CSSProperties,
     sendButton: {
       padding: '12px 24px',
@@ -755,7 +764,7 @@ function App() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      color: '#6b7280',
+      color: '#6e6e6e',
       fontSize: '16px'
     } as React.CSSProperties,
     modal: {
@@ -764,7 +773,7 @@ function App() {
       left: 0,
       right: 0,
       bottom: 0,
-      background: 'rgba(0, 0, 0, 0.6)',
+      background: 'rgba(0, 0, 0, 0.75)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -772,20 +781,21 @@ function App() {
       backdropFilter: 'blur(4px)'
     } as React.CSSProperties,
     modalContent: {
-      background: 'white',
+      background: '#2d2d30',
       padding: '32px',
       borderRadius: '16px',
       width: '500px',
       maxHeight: '80vh',
       overflowY: 'auto',
-      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
-      animation: 'slideUp 0.3s ease-out'
+      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
+      animation: 'slideUp 0.3s ease-out',
+      border: '1px solid #3e3e42'
     } as React.CSSProperties,
     modalHeader: {
       fontSize: '24px',
       fontWeight: '600',
       marginBottom: '24px',
-      color: '#202123'
+      color: '#cccccc'
     } as React.CSSProperties,
     formGroup: {
       marginBottom: '16px'
@@ -795,28 +805,32 @@ function App() {
       marginBottom: '8px',
       fontSize: '14px',
       fontWeight: '600',
-      color: '#202123'
+      color: '#cccccc'
     } as React.CSSProperties,
     input: {
       width: '100%',
       padding: '10px 14px',
-      border: '1px solid #d1d5db',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       fontSize: '14px',
       transition: 'border-color 0.2s, box-shadow 0.2s',
-      outline: 'none'
+      outline: 'none',
+      background: '#1e1e1e',
+      color: '#cccccc'
     } as React.CSSProperties,
     textareaLarge: {
       width: '100%',
       padding: '10px 14px',
-      border: '1px solid #d1d5db',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       fontSize: '14px',
       minHeight: '120px',
       fontFamily: 'inherit',
       resize: 'vertical',
       transition: 'border-color 0.2s, box-shadow 0.2s',
-      outline: 'none'
+      outline: 'none',
+      background: '#1e1e1e',
+      color: '#cccccc'
     } as React.CSSProperties,
     modalButtons: {
       display: 'flex',
@@ -844,8 +858,8 @@ function App() {
       flex: 1,
       padding: '12px',
       background: 'transparent',
-      color: '#6b7280',
-      border: '1px solid #d1d5db',
+      color: '#999999',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       cursor: 'pointer',
       fontSize: '15px',
@@ -853,8 +867,8 @@ function App() {
       transition: 'all 0.2s'
     } as React.CSSProperties,
     cancelButtonHover: {
-      background: '#f3f4f6',
-      borderColor: '#9ca3af'
+      background: '#37373d',
+      borderColor: '#4e4e52'
     } as React.CSSProperties,
     toolsList: {
       display: 'flex',
@@ -867,8 +881,8 @@ function App() {
       alignItems: 'flex-start',
       gap: '12px',
       padding: '12px',
-      background: '#1e1e1e',
-      border: '1px solid #2d2d2d',
+      background: '#252526',
+      border: '1px solid #3e3e42',
       borderRadius: '8px',
       cursor: 'pointer',
       transition: 'all 0.2s'
@@ -882,14 +896,14 @@ function App() {
     } as React.CSSProperties,
     toolName: {
       fontWeight: '600',
-      color: '#e5e7eb',
+      color: '#cccccc',
       fontSize: '15px',
       marginBottom: '4px',
       display: 'block'
     } as React.CSSProperties,
     toolDescription: {
       fontSize: '13px',
-      color: '#9ca3af',
+      color: '#999999',
       lineHeight: '1.5',
       display: 'block'
     } as React.CSSProperties
@@ -922,25 +936,47 @@ function App() {
 
         {/* Agents Section - Imported Agents */}
         <div style={{ borderTop: '1px solid #2a2b32', paddingTop: '16px', marginTop: '16px' }}>
-          <div style={{ ...styles.sidebarHeader, marginBottom: '12px', cursor: 'pointer' }} onClick={() => setShowAgentsList(!showAgentsList)}>
+          <div style={{ 
+            ...styles.sidebarHeader, 
+            marginBottom: '12px', 
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }} onClick={() => setShowAgentsList(!showAgentsList)}>
             <div style={styles.sidebarTitle}>{showAgentsList ? '▼' : '▶'} Agents</div>
+            <button
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#0078d4',
+                fontSize: '18px',
+                cursor: 'pointer',
+                padding: '0',
+                width: '24px',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'color 0.2s'
+              }}
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                handleOpenAgentImport();
+              }}
+              onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
+                e.currentTarget.style.color = '#1890ff';
+              }}
+              onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
+                e.currentTarget.style.color = '#0078d4';
+              }}
+              title="Import Agent"
+            >
+              +
+            </button>
           </div>
           {showAgentsList && (
             <div style={styles.threadList} className="threadList collapsibleContent">
-              {/* Import Agent Button - styled like a list item */}
-              <div
-                style={{
-                  ...styles.threadItem,
-                  border: '1px dashed #565869',
-                  color: '#a0a0a0'
-                }}
-                onClick={handleOpenAgentImport}
-              >
-                <div style={styles.threadTitle}>
-                  ➕ Import Agent
-                </div>
-              </div>
-              
               {importedAgents.map((agent: Agent) => (
                 <div
                   key={agent.id}
@@ -951,15 +987,16 @@ function App() {
                   onClick={() => handleSelectAgent(agent.id)}
                 >
                   <div style={styles.threadTitle}>
-                    🤖 {agent.name}
+                    {agent.name}
                   </div>
                   <button
                     style={{
                       ...styles.deleteButton,
                       padding: '4px 8px',
                       fontSize: '11px',
-                      opacity: 0,
-                      transition: 'opacity 0.2s'
+                      color: '#6e6e6e',
+                      border: 'none',
+                      transition: 'color 0.2s'
                     }}
                     className="delete-btn-hover"
                     onClick={(e: React.MouseEvent) => {
@@ -967,10 +1004,10 @@ function App() {
                       handleDeleteAgent(agent.id);
                     }}
                     onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '1';
+                      e.currentTarget.style.color = '#ef4444';
                     }}
                     onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '0';
+                      e.currentTarget.style.color = '#6e6e6e';
                     }}
                   >
                     ✕
@@ -988,8 +1025,44 @@ function App() {
 
         {/* Threads Section - Show threads for selected agent or default */}
         <div style={{ borderTop: '1px solid #2a2b32', paddingTop: '16px', marginTop: '16px' }}>
-          <div style={{ ...styles.sidebarHeader, marginBottom: '12px', cursor: 'pointer' }} onClick={() => setShowThreadsList(!showThreadsList)}>
+          <div style={{ 
+            ...styles.sidebarHeader, 
+            marginBottom: '12px', 
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }} onClick={() => setShowThreadsList(!showThreadsList)}>
             <div style={styles.sidebarTitle}>{showThreadsList ? '▼' : '▶'} Threads</div>
+            <button
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#0078d4',
+                fontSize: '18px',
+                cursor: 'pointer',
+                padding: '0',
+                width: '24px',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'color 0.2s'
+              }}
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                handleNewThread();
+              }}
+              onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
+                e.currentTarget.style.color = '#1890ff';
+              }}
+              onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
+                e.currentTarget.style.color = '#0078d4';
+              }}
+              title="New Thread"
+            >
+              +
+            </button>
           </div>
           {showThreadsList && (
             <div style={styles.threadList} className="threadList collapsibleContent">
@@ -1011,25 +1084,26 @@ function App() {
                   }}
                 >
                   <div style={styles.threadTitle}>
-                    {thread.isDefaultAgent ? '' : '🤖 '}{thread.title}
+                    {thread.title}
                   </div>
                   <button
                     style={{
                       ...styles.deleteButton,
                       padding: '4px 8px',
                       fontSize: '11px',
-                      opacity: 0,
-                      transition: 'opacity 0.2s'
+                      color: '#6e6e6e',
+                      border: 'none',
+                      transition: 'color 0.2s'
                     }}
                     onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
                       handleDeleteThread(thread.threadId);
                     }}
                     onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '1';
+                      e.currentTarget.style.color = '#ef4444';
                     }}
                     onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-                      e.currentTarget.style.opacity = '0';
+                      e.currentTarget.style.color = '#6e6e6e';
                     }}
                   >
                     ✕
