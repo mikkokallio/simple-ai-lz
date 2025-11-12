@@ -22,11 +22,10 @@ from azure.search.documents.indexes.models import (
     VectorSearchProfile,
 )
 from openai import AzureOpenAI
-import tiktoken
 import azure.functions as func
 
 # Environment variables
-STORAGE_ACCOUNT_NAME = os.getenv("STORAGE_ACCOUNT_NAME")
+STORAGE_CONNECTION_STRING = os.getenv("STORAGE_CONNECTION_STRING")
 FINLEX_URL = os.getenv("FINLEX_URL", "https://data.finlex.fi/download/kaikki")
 BLOB_CONTAINER_NAME = os.getenv("BLOB_CONTAINER_NAME", "finlex-raw")
 TARGET_YEARS = os.getenv("TARGET_YEARS", "2024,2025").split(",")
@@ -36,14 +35,11 @@ AZURE_OPENAI_DIMENSIONS = int(os.getenv("AZURE_OPENAI_DIMENSIONS", "1536"))
 AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 AZURE_SEARCH_INDEX = os.getenv("AZURE_SEARCH_INDEX", "finlex-functions-index")
 
-# Initialize clients with managed identity
-credential = DefaultAzureCredential()
-blob_service_client = BlobServiceClient(
-    account_url=f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-    credential=credential
-)
+# Initialize clients with connection strings (like working example)
+blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
 container_client = blob_service_client.get_container_client(BLOB_CONTAINER_NAME)
 
+credential = DefaultAzureCredential()
 openai_client = AzureOpenAI(
     api_version="2024-02-01",
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
@@ -135,8 +131,9 @@ def ingest_function(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def chunk_text(text: str, max_tokens: int = 500, overlap_tokens: int = 50) -> list:
-    """Chunk text using tiktoken with sentence boundary detection."""
-    encoding = tiktoken.get_encoding("cl100k_base")
+    """Chunk text using character-based estimation (approximates 4 chars = 1 token)."""
+    max_chars = max_tokens * 4
+    overlap_chars = overlap_tokens * 4
     
     # Split into sentences
     sentences = []
@@ -149,28 +146,26 @@ def chunk_text(text: str, max_tokens: int = 500, overlap_tokens: int = 50) -> li
     
     chunks = []
     current_chunk = []
-    current_tokens = 0
+    current_length = 0
     
     for sentence in sentences:
-        sentence_tokens = len(encoding.encode(sentence))
+        sentence_length = len(sentence)
         
-        if current_tokens + sentence_tokens > max_tokens and current_chunk:
+        if current_length + sentence_length > max_chars and current_chunk:
             # Save current chunk
             chunks.append(' '.join(current_chunk))
             
-            # Start new chunk with overlap
-            overlap_text = ' '.join(current_chunk[-3:])  # Last 3 sentences for context
-            overlap_token_count = len(encoding.encode(overlap_text))
-            
-            if overlap_token_count < overlap_tokens:
+            # Start new chunk with overlap (last 3 sentences)
+            overlap_text = ' '.join(current_chunk[-3:])
+            if len(overlap_text) < overlap_chars:
                 current_chunk = current_chunk[-3:]
-                current_tokens = overlap_token_count
+                current_length = len(overlap_text)
             else:
                 current_chunk = []
-                current_tokens = 0
+                current_length = 0
         
         current_chunk.append(sentence)
-        current_tokens += sentence_tokens
+        current_length += sentence_length
     
     if current_chunk:
         chunks.append(' '.join(current_chunk))

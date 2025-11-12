@@ -107,8 +107,15 @@ export class CosmosAgentManager {
       throw new Error('Manager not initialized');
     }
 
-    // Delete agent
-    await this.agentsContainer.item(agentId, agentId).delete();
+    // Delete agent (ignore 404 if already deleted)
+    try {
+      await this.agentsContainer.item(agentId, agentId).delete();
+    } catch (error: any) {
+      if (error.code !== 404) {
+        throw error;
+      }
+      // Agent already deleted, continue with cleanup
+    }
 
     // Delete associated threads (query by partition key)
     const { resources: threads } = await this.threadsContainer.items
@@ -119,7 +126,14 @@ export class CosmosAgentManager {
       .fetchAll();
 
     for (const thread of threads) {
-      await this.threadsContainer.item(thread.id, agentId).delete();
+      try {
+        await this.threadsContainer.item(thread.id, agentId).delete();
+      } catch (error: any) {
+        if (error.code !== 404) {
+          throw error;
+        }
+        // Thread already deleted, continue
+      }
     }
   }
 

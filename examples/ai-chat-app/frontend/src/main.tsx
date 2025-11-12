@@ -942,7 +942,8 @@ function App() {
             cursor: 'pointer',
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center'
+            alignItems: 'center',
+            paddingRight: '8px'
           }} onClick={() => setShowAgentsList(!showAgentsList)}>
             <div style={styles.sidebarTitle}>{showAgentsList ? '▼' : '▶'} Agents</div>
             <button
@@ -960,7 +961,7 @@ function App() {
                 justifyContent: 'center',
                 borderRadius: '4px',
                 transition: 'all 0.2s',
-                marginRight: '4px',
+                marginRight: '-12px',
                 lineHeight: '1',
                 fontWeight: '500'
               }}
@@ -1048,7 +1049,8 @@ function App() {
             cursor: 'pointer',
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center'
+            alignItems: 'center',
+            paddingRight: '8px'
           }} onClick={() => setShowThreadsList(!showThreadsList)}>
             <div style={styles.sidebarTitle}>{showThreadsList ? '▼' : '▶'} Threads</div>
             <button
@@ -1066,7 +1068,7 @@ function App() {
                 justifyContent: 'center',
                 borderRadius: '4px',
                 transition: 'all 0.2s',
-                marginRight: '4px',
+                marginRight: '-12px',
                 lineHeight: '1',
                 fontWeight: '500'
               }}
