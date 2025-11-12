@@ -7,6 +7,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 // Agent metadata stored in Cosmos
 export interface AgentMetadata {
   id: string;
+  foundryAgentId?: string;  // The actual Foundry agent ID (same as id, kept for backward compatibility)
   name: string;
   instructions: string;
   model: string;

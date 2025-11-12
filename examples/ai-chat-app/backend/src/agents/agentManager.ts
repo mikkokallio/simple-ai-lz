@@ -8,8 +8,8 @@ import { DefaultAzureCredential } from '@azure/identity';
 
 // Agent metadata stored locally
 export interface AgentMetadata {
-  id: string;                     // Internal ID (e.g., "imported-agent-xxx" or "default")
-  foundryAgentId?: string;        // Original Foundry agent ID (for imported agents)
+  id: string;                     // Foundry agent ID (e.g., "asst_xxx")
+  foundryAgentId?: string;        // Same as id (kept for backward compatibility)
   name: string;
   instructions: string;
   model: string;

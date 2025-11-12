@@ -676,6 +676,8 @@ app.post('/api/threads/:threadId/messages', requireAuth, async (req: Request, re
       if (!agent) {
         return res.status(404).json({ error: 'Agent not found' });
       }
+      
+      // foundryAgentId is the same as id now (no more prefixing)
       foundryAgentId = (agent as AgentMetadata).foundryAgentId || agent.id;
       
       console.log(`🤖 Using imported agent: ${targetAgentId} (Foundry ID: ${foundryAgentId})`);
@@ -834,7 +836,7 @@ app.get('/api/agents', requireAuth, async (req: Request, res: Response) => {
       const foundryAgent = foundryAgents.find((fa: any) => fa.id === imported.foundryAgentId);
       
       return {
-        id: imported.foundryAgentId || imported.id,
+        id: imported.id,  // Use Cosmos ID directly (which is now the Foundry ID)
         name: foundryAgent?.name || imported.name,
         description: foundryAgent?.instructions?.substring(0, 100),
         model: foundryAgent?.model || imported.model,
@@ -901,14 +903,11 @@ app.post('/api/agents/import', requireAuth, async (req: Request, res: Response) 
       return res.status(404).json({ error: 'Agent not found in Foundry project' });
     }
     
-    // Use clean display name, but prepend "imported-agent-" to internal ID for tracking
-    const internalId = `imported-agent-${agent.id}`;
-    
-    // Save to local storage with user ID
+    // Save to Cosmos using Foundry agent ID directly
     await agentManager.importAgent({
-      id: internalId,                // Internal ID with prefix
-      foundryAgentId: agent.id,      // Original Foundry agent ID
-      name: agent.name,              // Clean display name for users
+      id: agent.id,                  // Use Foundry agent ID directly
+      foundryAgentId: agent.id,      // Same as id for consistency
+      name: agent.name,
       instructions: agent.instructions,
       model: agent.model,
       importedAt: new Date().toISOString(),
@@ -917,7 +916,7 @@ app.post('/api/agents/import', requireAuth, async (req: Request, res: Response) 
       userId: userId                 // Associate with user
     });
     
-    res.json({ success: true, agent: { ...agent, id: internalId, name: agent.name } });
+    res.json({ success: true, agent: { ...agent, id: agent.id, name: agent.name } });
   } catch (error) {
     console.error('Error importing agent:', error);
     res.status(500).json({ error: 'Failed to import agent' });

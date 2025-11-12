@@ -34,7 +34,7 @@ param cosmosAccountName string = ''
 param cosmosDatabaseName string = 'agent-metadata'
 
 @description('AI Foundry endpoint URL')
-param aiFoundryEndpoint string = 'https://foundry-mikkolabs.cognitiveservices.azure.com/'
+param aiFoundryEndpoint string = 'https://foundry-ezle7syi.cognitiveservices.azure.com/'
 
 @description('AI Foundry deployment name (model)')
 param aiFoundryDeployment string = 'gpt-5-mini'
