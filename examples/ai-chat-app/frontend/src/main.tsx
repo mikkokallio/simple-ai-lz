@@ -948,17 +948,21 @@ function App() {
             <button
               style={{
                 background: 'transparent',
-                border: 'none',
+                border: '1px solid #3e3e42',
                 color: '#0078d4',
-                fontSize: '18px',
+                fontSize: '16px',
                 cursor: 'pointer',
-                padding: '0',
+                padding: '4px',
                 width: '24px',
                 height: '24px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                transition: 'color 0.2s'
+                borderRadius: '4px',
+                transition: 'all 0.2s',
+                marginRight: '4px',
+                lineHeight: '1',
+                fontWeight: '500'
               }}
               onClick={(e: React.MouseEvent) => {
                 e.stopPropagation();
@@ -966,9 +970,11 @@ function App() {
               }}
               onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
                 e.currentTarget.style.color = '#1890ff';
+                e.currentTarget.style.borderColor = '#0078d4';
               }}
               onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
                 e.currentTarget.style.color = '#0078d4';
+                e.currentTarget.style.borderColor = '#3e3e42';
               }}
               title="Import Agent"
             >
@@ -991,12 +997,21 @@ function App() {
                   </div>
                   <button
                     style={{
-                      ...styles.deleteButton,
-                      padding: '4px 8px',
-                      fontSize: '11px',
+                      background: 'transparent',
+                      border: '1px solid #3e3e42',
+                      padding: '4px',
+                      fontSize: '12px',
                       color: '#6e6e6e',
-                      border: 'none',
-                      transition: 'color 0.2s'
+                      width: '24px',
+                      height: '24px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      marginLeft: '8px',
+                      lineHeight: '1'
                     }}
                     className="delete-btn-hover"
                     onClick={(e: React.MouseEvent) => {
@@ -1005,9 +1020,11 @@ function App() {
                     }}
                     onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
                       e.currentTarget.style.color = '#ef4444';
+                      e.currentTarget.style.borderColor = '#ef4444';
                     }}
                     onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
                       e.currentTarget.style.color = '#6e6e6e';
+                      e.currentTarget.style.borderColor = '#3e3e42';
                     }}
                   >
                     ✕
@@ -1037,17 +1054,21 @@ function App() {
             <button
               style={{
                 background: 'transparent',
-                border: 'none',
+                border: '1px solid #3e3e42',
                 color: '#0078d4',
-                fontSize: '18px',
+                fontSize: '16px',
                 cursor: 'pointer',
-                padding: '0',
+                padding: '4px',
                 width: '24px',
                 height: '24px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                transition: 'color 0.2s'
+                borderRadius: '4px',
+                transition: 'all 0.2s',
+                marginRight: '4px',
+                lineHeight: '1',
+                fontWeight: '500'
               }}
               onClick={(e: React.MouseEvent) => {
                 e.stopPropagation();
@@ -1055,9 +1076,11 @@ function App() {
               }}
               onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
                 e.currentTarget.style.color = '#1890ff';
+                e.currentTarget.style.borderColor = '#0078d4';
               }}
               onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
                 e.currentTarget.style.color = '#0078d4';
+                e.currentTarget.style.borderColor = '#3e3e42';
               }}
               title="New Thread"
             >
@@ -1088,12 +1111,21 @@ function App() {
                   </div>
                   <button
                     style={{
-                      ...styles.deleteButton,
-                      padding: '4px 8px',
-                      fontSize: '11px',
+                      background: 'transparent',
+                      border: '1px solid #3e3e42',
+                      padding: '4px',
+                      fontSize: '12px',
                       color: '#6e6e6e',
-                      border: 'none',
-                      transition: 'color 0.2s'
+                      width: '24px',
+                      height: '24px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      marginLeft: '8px',
+                      lineHeight: '1'
                     }}
                     onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
@@ -1101,9 +1133,11 @@ function App() {
                     }}
                     onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
                       e.currentTarget.style.color = '#ef4444';
+                      e.currentTarget.style.borderColor = '#ef4444';
                     }}
                     onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
                       e.currentTarget.style.color = '#6e6e6e';
+                      e.currentTarget.style.borderColor = '#3e3e42';
                     }}
                   >
                     ✕
