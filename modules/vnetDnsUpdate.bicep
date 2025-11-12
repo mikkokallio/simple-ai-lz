@@ -1,45 +1,46 @@
 // ============================================================================
-// VNet DNS Configuration Update Module
+// MODULE: VNet DNS Server Update
 // ============================================================================
-// This module updates the VNet's DNS servers after the DNS Resolver is deployed
-// to enable automatic DNS resolution for VPN clients and Azure resources
+// This module updates an existing VNet's DNS server configuration.
+// Used after deploying a DNS Resolver to point the VNet to use it.
+//
+// IMPORTANT: This module references the existing VNet and redeploys it
+// with the updated dhcpOptions.dnsServers property. All other VNet properties
+// (addressSpace, subnets) are preserved from the existing configuration.
+// ============================================================================
 
-@description('VNet name to update')
+@description('Name of the existing VNet to update')
 param vnetName string
 
-@description('DNS server IP addresses (DNS Resolver inbound endpoint)')
+@description('Array of DNS server IP addresses to configure')
 param dnsServers array
 
 // ============================================================================
-// UPDATE VNET DNS CONFIGURATION
+// REFERENCE EXISTING VNET AND UPDATE DNS
 // ============================================================================
 
-resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
+// Reference the existing VNet to get its current configuration
+resource vnet 'Microsoft.Network/virtualNetworks@2023-05-01' existing = {
   name: vnetName
 }
 
-// Note: We can't directly update existing VNet properties in Bicep
-// This module documents the required manual step or Azure CLI command
-// The VNet DNS configuration must be updated after DNS Resolver deployment
+// Update the VNet with new DNS servers while preserving all other properties
+resource updateVnet 'Microsoft.Network/virtualNetworks@2023-05-01' = {
+  name: vnet.name
+  location: resourceGroup().location
+  properties: {
+    addressSpace: vnet.properties.addressSpace
+    subnets: vnet.properties.subnets
+    dhcpOptions: {
+      dnsServers: dnsServers
+    }
+  }
+}
 
 // ============================================================================
 // OUTPUTS
 // ============================================================================
 
-output setupInstructions string = '''
-To complete VNet DNS configuration, run:
-az network vnet update \\
-  --resource-group ${resourceGroup().name} \\
-  --name ${vnetName} \\
-  --dns-servers ${join(dnsServers, ' ')}
-
-This configures the VNet to use the DNS Resolver for all resources,
-including VPN clients (Point-to-Site connections will automatically
-receive these DNS servers).
-
-After updating, regenerate VPN client configuration:
-az network vnet-gateway vpn-client generate \\
-  --resource-group ${resourceGroup().name} \\
-  --name <vpn-gateway-name> \\
-  --processor-architecture Amd64
-'''
+output vnetId string = updateVnet.id
+output vnetName string = updateVnet.name
+output configuredDnsServers array = updateVnet.properties.dhcpOptions.dnsServers

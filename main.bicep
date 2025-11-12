@@ -54,6 +54,9 @@ param deployDocumentIntelligence bool = true
 @description('Deploy Document Translator service')
 param deployDocumentTranslator bool = true
 
+@description('Deploy AI Search service for Finlex ingestion')
+param deployAiSearch bool = false
+
 @description('Deployment timestamp')
 param deploymentTimestamp string = utcNow('yyyy-MM-dd')
 
@@ -227,6 +230,21 @@ module cognitiveServices 'modules/cognitiveServices.bicep' = if (deployAiService
   ]
 }
 
+// AI Search (for Finlex document indexing with vector search)
+module aiSearch 'modules/aiSearch.bicep' = if (deployAiSearch) {
+  scope: rg
+  name: 'aiSearch-deployment'
+  params: {
+    location: location
+    searchServiceName: 'srch-ailz-${uniqueSuffix}'
+    sku: 'basic'
+    replicaCount: 1
+    partitionCount: 1
+    semanticSearch: 'disabled' // Change to 'free' or 'standard' to enable semantic search
+    tags: commonTags
+  }
+}
+
 // ============================================================================
 // CONTAINER APPS
 // ============================================================================
@@ -356,3 +374,8 @@ output documentTranslatorName string = (deployAiServices && deployDocumentTransl
 output documentTranslatorEndpoint string = (deployAiServices && deployDocumentTranslator) ? cognitiveServices!.outputs.documentTranslatorEndpoint : ''
 output documentTranslatorId string = (deployAiServices && deployDocumentTranslator) ? cognitiveServices!.outputs.documentTranslatorId : ''
 
+// AI Search outputs (if deployed)
+output aiSearchDeployed bool = deployAiSearch
+output aiSearchName string = deployAiSearch ? aiSearch!.outputs.searchServiceName : 'Not deployed'
+output aiSearchEndpoint string = deployAiSearch ? aiSearch!.outputs.searchServiceEndpoint : ''
+output aiSearchId string = deployAiSearch ? aiSearch!.outputs.searchServiceId : ''

@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "FINLEX_URL": "https://data.finlex.fi/download/kaikki",
+    "TARGET_YEARS": "2024,2025",
+    "STORAGE_ACCOUNT_NAME": "stailzezle7syi",
+    "BLOB_CONTAINER_NAME": "finlex-raw",
+    "AZURE_OPENAI_ENDPOINT": "https://foundry-ezle7syi.cognitiveservices.azure.com/",
+    "AZURE_OPENAI_DEPLOYMENT": "text-embedding-3-small",
+    "AZURE_OPENAI_DIMENSIONS": "1536",
+    "AZURE_SEARCH_ENDPOINT": "https://srch-ailz-ezle7syi.search.windows.net",
+    "AZURE_SEARCH_INDEX": "finlex-functions-index"
+  }
+}

@@ -1,0 +1,23 @@
+# Multi-Stage Finlex Ingestion - Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy shared utilities
+COPY src-multi/shared/ ./shared/
+
+# Copy all stage scripts
+COPY src-multi/stage1_download.py .
+COPY src-multi/stage2_parse.py .
+COPY src-multi/stage3_chunk.py .
+COPY src-multi/stage4_embed.py .
+COPY src-multi/stage5_index.py .
+
+# Default command (will be overridden by job configuration)
+CMD ["python", "-u", "stage1_download.py"]

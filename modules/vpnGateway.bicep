@@ -21,6 +21,9 @@ param tenantId string
 @description('VPN client address pool for P2S connections')
 param vpnClientAddressPool string = '172.16.201.0/24'
 
+@description('Custom routes to advertise to VPN clients (e.g., spoke VNet ranges)')
+param customRoutes array = []
+
 // ============================================================================
 // VARIABLES
 // ============================================================================
@@ -117,7 +120,7 @@ resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2023-09-01' = {
       vpnClientIpsecPolicies: []
     }
     customRoutes: {
-      addressPrefixes: []
+      addressPrefixes: customRoutes
     }
   }
 }
