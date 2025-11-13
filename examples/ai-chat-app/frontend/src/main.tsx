@@ -961,7 +961,7 @@ function App() {
                 justifyContent: 'center',
                 borderRadius: '4px',
                 transition: 'all 0.2s',
-                marginRight: '-12px',
+                marginRight: '0px',
                 lineHeight: '1',
                 fontWeight: '500'
               }}

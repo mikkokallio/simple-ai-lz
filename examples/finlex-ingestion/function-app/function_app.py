@@ -25,7 +25,7 @@ from openai import AzureOpenAI
 import azure.functions as func
 
 # Environment variables
-STORAGE_CONNECTION_STRING = os.getenv("STORAGE_CONNECTION_STRING")
+STORAGE_ACCOUNT_NAME = os.getenv("STORAGE_ACCOUNT_NAME")
 FINLEX_URL = os.getenv("FINLEX_URL", "https://data.finlex.fi/download/kaikki")
 BLOB_CONTAINER_NAME = os.getenv("BLOB_CONTAINER_NAME", "finlex-raw")
 TARGET_YEARS = os.getenv("TARGET_YEARS", "2024,2025").split(",")
@@ -35,11 +35,14 @@ AZURE_OPENAI_DIMENSIONS = int(os.getenv("AZURE_OPENAI_DIMENSIONS", "1536"))
 AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 AZURE_SEARCH_INDEX = os.getenv("AZURE_SEARCH_INDEX", "finlex-functions-index")
 
-# Initialize clients with connection strings (like working example)
-blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+# Initialize clients with managed identity
+credential = DefaultAzureCredential()
+blob_service_client = BlobServiceClient(
+    account_url=f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
+    credential=credential
+)
 container_client = blob_service_client.get_container_client(BLOB_CONTAINER_NAME)
 
-credential = DefaultAzureCredential()
 openai_client = AzureOpenAI(
     api_version="2024-02-01",
     azure_endpoint=AZURE_OPENAI_ENDPOINT,

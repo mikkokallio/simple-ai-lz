@@ -875,48 +875,68 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       
     } else if (mode === 'ocr-cu') {
       // Tool 2: Azure AI Foundry Content Understanding
-      if (!process.env.AI_FOUNDRY_ENDPOINT || !process.env.AI_FOUNDRY_KEY) {
-        return res.status(500).json({ status: 'error', message: 'AI Foundry not configured. Set AI_FOUNDRY_ENDPOINT and AI_FOUNDRY_KEY environment variables.' });
+      if (!process.env.FOUNDRY_ENDPOINT) {
+        return res.status(500).json({ 
+          status: 'error', 
+          message: 'Content Understanding not configured. Set FOUNDRY_ENDPOINT environment variable.' 
+        });
       }
 
-      const aiFoundryEndpoint = process.env.AI_FOUNDRY_ENDPOINT.replace(/\/$/, '');
-      const base64File = fileBuffer.toString('base64');
-      
-      const requestBody = {
-        base64Source: base64File
-      };
-
-      console.log(`[OCR_CU] Calling AI Foundry endpoint: ${aiFoundryEndpoint}`);
+      console.log(`[OCR_CU] Starting Content Understanding analysis for document ${documentId}`);
 
       try {
-        const response = await axios.post(
-          `${aiFoundryEndpoint}/formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31`,
-          requestBody,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Ocp-Apim-Subscription-Key': process.env.AI_FOUNDRY_KEY,
-            }
-          }
-        );
-
-        const analysisData = response.data;
+        // Upload file to blob storage and generate SAS URL (required for private storage)
+        if (!blobServiceClient) {
+          throw new Error('Storage not configured');
+        }
+        
+        const containerClient = blobServiceClient.getContainerClient('workspace');
+        const tempBlobPath = `${metadata.userId}/${documentId}/temp/${metadata.originalFilename}`;
+        const tempBlobClient = containerClient.getBlockBlobClient(tempBlobPath);
+        
+        console.log('[OCR_CU] Uploading file to temporary blob:', tempBlobPath);
+        await tempBlobClient.upload(fileBuffer, fileBuffer.length);
+        
+        // Generate SAS URL with 2 hour expiry
+        console.log('[OCR_CU] Generating SAS URL for Content Understanding access');
+        const sasUrl = await generateBlobSasUrl(tempBlobClient, 120);
+        
+        // Submit Content Understanding job with SAS URL
+        const analyzerId = req.body.analyzerId || 'prebuilt-documentAnalyzer';
+        const operationLocation = await submitContentUnderstandingJob(sasUrl, analyzerId);
+        
+        // Poll for results
+        const cuResult = await pollContentUnderstandingResult(operationLocation, 120, 10);
+        
+        // Delete temporary blob after processing
+        console.log('[OCR_CU] Deleting temporary blob');
+        await tempBlobClient.delete();
+        
+        // Extract markdown and full result
+        const markdown = cuResult.result?.contents?.[0]?.markdown || '';
+        const pages = cuResult.result?.contents?.[0]?.pages || [];
         
         result = {
           service: 'Azure AI Foundry Content Understanding',
-          serviceDescription: 'Advanced document analysis with entity extraction',
-          text: analysisData.analyzeResult?.content || analysisData.content || '',
-          entities: analysisData.analyzeResult?.entities || analysisData.entities || [],
-          keyValuePairs: analysisData.analyzeResult?.keyValuePairs || analysisData.keyValuePairs || [],
-          languages: analysisData.analyzeResult?.languages || analysisData.languages || [],
-          paragraphs: analysisData.analyzeResult?.paragraphs || []
+          serviceDescription: 'Advanced document understanding with layout analysis',
+          analyzerId: analyzerId,
+          markdown: markdown,
+          pages: pages,
+          pageCount: pages.length,
+          fullResult: cuResult.result
         };
+        
+        console.log(`[OCR_CU] Successfully analyzed document, extracted ${pages.length} pages`);
       } catch (error: any) {
-        console.error('[OCR_CU] AI Foundry error:', error.response?.data || error.message);
-        throw new Error(`AI Foundry Content Understanding failed: ${error.response?.data?.error?.message || error.message}`);
+        console.error('[OCR_CU] Content Understanding error:', error.message);
+        throw new Error(`Content Understanding failed: ${error.message}`);
       }
       
-      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result, undefined, outputFormat || 'json');
+      // Save both JSON and markdown
+      await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result, 'result.json', 'json');
+      if (result.markdown) {
+        await saveResultToWorkspace(metadata.userId, documentId, 'ocr-cu', result.markdown, 'result.md', 'text');
+      }
       
     } else if (mode === 'ocr-openai') {
       // Tool 3: OpenAI Vision OCR
@@ -1414,11 +1434,95 @@ app.post('/api/ocr/language-analysis', upload.single('file'), async (req: Reques
 
 // OCR endpoint - Content Understanding (stub/not implemented)
 app.post('/api/ocr/content-understanding', upload.single('file'), async (req: Request, res: Response) => {
-  res.status(501).json({
-    status: 'error',
-    message: 'Content Understanding OCR is not yet implemented',
-    note: 'This feature requires additional Azure AI services configuration'
-  });
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No file provided'
+      });
+    }
+
+    if (!process.env.FOUNDRY_ENDPOINT) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Content Understanding not configured. Set FOUNDRY_ENDPOINT environment variable.'
+      });
+    }
+
+    console.log('[CU] Processing file:', req.file.originalname);
+    
+    // For Content Understanding, we need to upload to blob storage and generate SAS URL
+    // (Content Understanding API requires a URL, doesn't support direct file upload)
+    if (!blobServiceClient) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Storage not configured'
+      });
+    }
+    
+    const containerClient = blobServiceClient.getContainerClient('workspace');
+    const userId = STATIC_USER_ID;
+    const documentId = req.body.documentId || uuidv4();
+    const tempBlobPath = `${userId}/${documentId}/temp/${req.file.originalname}`;
+    const tempBlobClient = containerClient.getBlockBlobClient(tempBlobPath);
+    
+    console.log('[CU] Uploading file to temporary blob:', tempBlobPath);
+    await tempBlobClient.upload(req.file.buffer, req.file.buffer.length);
+    
+    // Generate SAS URL with 2 hour expiry
+    console.log('[CU] Generating SAS URL for Content Understanding access');
+    const sasUrl = await generateBlobSasUrl(tempBlobClient, 120);
+    
+    // Submit Content Understanding job with SAS URL
+    const analyzerId = req.body.analyzerId || 'prebuilt-documentAnalyzer';
+    const operationLocation = await submitContentUnderstandingJob(sasUrl, analyzerId);
+    
+    // Poll for results
+    const cuResult = await pollContentUnderstandingResult(operationLocation, 120, 10);
+    
+    // Delete temporary blob after processing
+    console.log('[CU] Deleting temporary blob');
+    await tempBlobClient.delete();
+    
+    // Format response
+    const markdown = cuResult.result?.contents?.[0]?.markdown || '';
+    const pages = cuResult.result?.contents?.[0]?.pages || [];
+    
+    const result = {
+      status: 'success',
+      service: 'Azure AI Foundry Content Understanding',
+      serviceDescription: 'Advanced document understanding with layout analysis',
+      analyzerId: analyzerId,
+      markdown: markdown,
+      pages: pages,
+      pageCount: pages.length,
+      fullResult: cuResult.result
+    };
+
+    // Save to workspace if documentId was provided
+    if (documentId) {
+      try {
+        await saveResultToWorkspace(userId, documentId, 'ocr-cu', result, 'result.json', 'json');
+        if (markdown) {
+          await saveResultToWorkspace(userId, documentId, 'ocr-cu', markdown, 'result.md', 'text');
+        }
+        console.log('[CU] Saved results to workspace for document', documentId);
+      } catch (saveError) {
+        console.error('[CU] Failed to save to workspace:', saveError);
+        // Continue even if save fails
+      }
+    }
+
+    res.json(result);
+    
+  } catch (error: any) {
+    console.error('[CU] Error:', error.message);
+    res.status(500).json({
+      status: 'error',
+      message: 'Content Understanding failed',
+      error: error.message
+    });
+  }
 });
 
 // Translation endpoint - Azure Text Translation (synchronous, no blob needed)
@@ -1604,6 +1708,222 @@ app.post('/api/translate', upload.single('file'), async (req: Request, res: Resp
     });
   }
 });
+
+// Content Understanding helper functions
+interface ContentUnderstandingResult {
+  status: string;
+  result?: {
+    contents: Array<{
+      markdown: string;
+      pages: Array<{
+        lines: Array<{
+          content: string;
+          source: string;
+          spans: Array<{ offset: number; length: number }>;
+        }>;
+        words?: Array<{
+          content: string;
+          source: string;
+          confidence?: number;
+        }>;
+      }>;
+    }>;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+/**
+ * Generate a temporary SAS URL for a blob with read permissions
+ * @param blobClient - The blob client to generate SAS for
+ * @param expiryMinutes - How long the SAS should be valid (default: 60 minutes)
+ * @returns SAS URL with read permissions
+ */
+async function generateBlobSasUrl(blobClient: BlockBlobClient, expiryMinutes: number = 60): Promise<string> {
+  if (!storageAccountName) {
+    throw new Error('Storage account name not configured');
+  }
+  
+  const startsOn = new Date();
+  const expiresOn = new Date(startsOn.getTime() + expiryMinutes * 60 * 1000);
+  
+  // For managed identity, we need to use user delegation key
+  // Get the user delegation key from the service
+  const userDelegationKey = await blobServiceClient!.getUserDelegationKey(startsOn, expiresOn);
+  
+  // Generate SAS token with read permission using user delegation key
+  const sasToken = generateBlobSASQueryParameters(
+    {
+      containerName: blobClient.containerName,
+      blobName: blobClient.name,
+      permissions: BlobSASPermissions.parse('r'), // read only
+      startsOn,
+      expiresOn,
+      protocol: SASProtocol.Https
+    },
+    userDelegationKey,
+    storageAccountName
+  ).toString();
+  
+  return `${blobClient.url}?${sasToken}`;
+}
+
+/**
+ * Submit a document for Content Understanding analysis
+ * @param fileUrl - URL to file (must be publicly accessible or use SAS token for private storage)
+ * @param analyzerId - Analyzer to use (default: prebuilt-documentAnalyzer)
+ * @returns Operation location URL for polling
+ */
+async function submitContentUnderstandingJob(
+  fileUrl: string,
+  analyzerId: string = 'prebuilt-documentAnalyzer'
+): Promise<string> {
+  const foundryEndpoint = process.env.FOUNDRY_ENDPOINT;
+  
+  if (!foundryEndpoint) {
+    throw new Error('FOUNDRY_ENDPOINT must be configured');
+  }
+
+  const endpoint = foundryEndpoint.replace(/\/$/, '');
+  const url = `${endpoint}/contentunderstanding/analyzers/${analyzerId}:analyze?api-version=2025-05-01-preview`;
+  
+  console.log('[CU] Submitting job to:', url);
+  
+  try {
+    // Get access token using managed identity
+    const tokenResponse = await credential.getToken('https://cognitiveservices.azure.com/.default');
+    const accessToken = tokenResponse.token;
+    
+    console.log('[CU] Submitting file URL to Content Understanding');
+    const requestBody = { url: fileUrl };
+    
+    const response = await axios.post(
+      url,
+      requestBody,
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    const operationLocation = response.headers['operation-location'];
+    if (!operationLocation) {
+      throw new Error('Operation-Location header not found in response');
+    }
+    
+    console.log('[CU] Job submitted, operation location:', operationLocation);
+    return operationLocation;
+  } catch (error: any) {
+    console.error('[CU] Failed to submit job:', error.response?.data || error.message);
+    throw new Error(`Content Understanding job submission failed: ${error.response?.data?.error?.message || error.message}`);
+  }
+}
+
+/**
+ * Poll Content Understanding job until completion
+ * @param operationLocation - URL returned from job submission
+ * @param maxWaitSeconds - Maximum time to wait (default: 120 seconds)
+ * @param pollIntervalSeconds - Seconds between polls (default: 10 seconds)
+ * @returns Final result when status is Succeeded
+ */
+async function pollContentUnderstandingResult(
+  operationLocation: string,
+  maxWaitSeconds: number = 120,
+  pollIntervalSeconds: number = 10
+): Promise<ContentUnderstandingResult> {
+  const maxAttempts = Math.ceil(maxWaitSeconds / pollIntervalSeconds);
+  let attempts = 0;
+  
+  console.log('[CU] Starting to poll (max attempts:', maxAttempts, ')');
+  
+  while (attempts < maxAttempts) {
+    attempts++;
+    
+    // Wait before polling (except first attempt)
+    if (attempts > 1) {
+      await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
+    }
+    
+    try {
+      // Get access token using managed identity
+      const tokenResponse = await credential.getToken('https://cognitiveservices.azure.com/.default');
+      const accessToken = tokenResponse.token;
+      
+      const response = await axios.get<ContentUnderstandingResult>(
+        operationLocation,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        }
+      );
+      
+      const result = response.data;
+      const status = result.status;
+      
+      console.log(`[CU] Poll attempt ${attempts}/${maxAttempts}: status = ${status}`);
+      
+      if (status === 'Succeeded') {
+        console.log('[CU] Job succeeded!');
+        return result;
+      } else if (status === 'Failed') {
+        const errorMessage = result.error?.message || 'Analysis failed';
+        throw new Error(`Content Understanding failed: ${errorMessage}`);
+      } else if (status === 'Canceled' || status === 'Cancelled') {
+        throw new Error('Content Understanding job was cancelled');
+      }
+      
+      // Status is still Running or NotStarted, continue polling
+    } catch (error: any) {
+      if (error.message?.includes('Content Understanding')) {
+        // Re-throw our own errors
+        throw error;
+      }
+      console.error('[CU] Polling error:', error.response?.data || error.message);
+      throw new Error(`Failed to poll Content Understanding status: ${error.message}`);
+    }
+  }
+  
+  throw new Error(`Content Understanding timed out after ${maxWaitSeconds} seconds`);
+}
+
+/**
+ * Upload file to blob storage and get URL for Content Understanding
+ * Uses managed identity - no SAS tokens
+ */
+async function uploadTempBlobForContentUnderstanding(
+  fileBuffer: Buffer,
+  filename: string,
+  mimeType: string
+): Promise<string> {
+  if (!blobServiceClient) {
+    throw new Error('Storage not configured');
+  }
+  
+  const containerName = 'content-understanding-temp';
+  const containerClient = blobServiceClient.getContainerClient(containerName);
+  
+  // Ensure container exists
+  await containerClient.createIfNotExists({
+    access: 'blob' // Allow blob-level access (will use managed identity)
+  });
+  
+  const blobName = `${Date.now()}-${uuidv4()}-${filename}`;
+  const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+  
+  await blockBlobClient.upload(fileBuffer, fileBuffer.length, {
+    blobHTTPHeaders: { blobContentType: mimeType }
+  });
+  
+  const blobUrl = blockBlobClient.url;
+  console.log('[CU] Uploaded temp blob:', blobUrl);
+  
+  return blobUrl;
+}
 
 // Helper function to convert stream to buffer
 async function streamToBuffer(readableStream: NodeJS.ReadableStream): Promise<Buffer> {

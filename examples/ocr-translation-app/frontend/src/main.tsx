@@ -60,6 +60,21 @@ interface ProcessedResult {
   translatedDocumentUrl?: string
   service?: string
   error?: string
+  // Content Understanding specific fields
+  markdown?: string
+  pages?: Array<{
+    lines: Array<{
+      content: string
+      source: string
+      spans?: Array<{ offset: number; length: number }>
+    }>
+    words?: Array<{
+      content: string
+      source: string
+      confidence?: number
+    }>
+  }>
+  fullResult?: any
 }
 
 type ProcessingMode = 'ocr-di' | 'ocr-cu' | 'ocr-openai' | 'translate' | 'translate-openai' | 'document-translate'
@@ -99,6 +114,13 @@ function App() {
     onConfirm: () => void
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {} })
   
+  // Content Understanding viewer state
+  const [cuViewerModal, setCuViewerModal] = useState<{
+    isOpen: boolean
+    result: ProcessedResult | null
+    viewMode: 'markdown' | 'json' | 'bounding-boxes'
+  }>({ isOpen: false, result: null, viewMode: 'markdown' })
+  
   // UI state
   const [isDragging, setIsDragging] = useState(false)
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
@@ -115,6 +137,10 @@ function App() {
 
   const showConfirm = (title: string, message: string, onConfirm: () => void) => {
     setConfirmModal({ isOpen: true, title, message, onConfirm })
+  }
+
+  const showContentUnderstandingResult = (result: ProcessedResult) => {
+    setCuViewerModal({ isOpen: true, result, viewMode: 'markdown' })
   }
 
   useEffect(() => {
@@ -197,6 +223,9 @@ function App() {
                 console.log('[LOAD_RESULTS] Result data:', resultData)
                 if (resultData.status === 'success' && resultData.result) {
                   const result = resultData.result
+                  console.log('[LOAD_RESULTS] Processing result for mode:', storedResult.mode)
+                  console.log('[LOAD_RESULTS] Result has markdown:', !!result.markdown)
+                  console.log('[LOAD_RESULTS] Result has pages:', !!result.pages)
                   allResults.push({
                     documentId: doc.documentId,
                     userId: doc.userId,
@@ -209,8 +238,13 @@ function App() {
                     targetLanguage: result.targetLanguage,
                     translatedDocumentUrl: result.translatedDocumentUrl,
                     service: result.service,
-                    error: result.error
+                    error: result.error,
+                    // Content Understanding fields
+                    markdown: result.markdown,
+                    pages: result.pages,
+                    fullResult: result.fullResult
                   })
+                  console.log('[LOAD_RESULTS] Added result to allResults, total now:', allResults.length)
                 }
               }
             }
@@ -984,12 +1018,21 @@ function App() {
               ]}
               data={processedResults}
               onRowClick={(result) => {
+                console.log('[RESULT_CLICK] Clicked result:', result)
+                console.log('[RESULT_CLICK] Mode:', result.mode, 'Markdown:', !!result.markdown)
                 if (result.error) {
                   showMessage('Processing Error', result.error, 'error')
+                } else if (result.mode === 'ocr-cu') {
+                  // For Content Understanding, show enhanced viewer (even if markdown is missing)
+                  console.log('[RESULT_CLICK] Opening CU viewer')
+                  showContentUnderstandingResult(result)
                 } else if (result.ocrText) {
                   showMessage('Extracted Text', result.ocrText.substring(0, 500) + (result.ocrText.length > 500 ? '...' : ''), 'info')
                 } else if (result.translatedText) {
                   showMessage('Translation', result.translatedText.substring(0, 500) + (result.translatedText.length > 500 ? '...' : ''), 'info')
+                } else {
+                  console.log('[RESULT_CLICK] No matching condition, showing JSON')
+                  showMessage('Result', JSON.stringify(result, null, 2), 'info')
                 }
               }}
               selectedIds={[]}
@@ -1106,6 +1149,210 @@ function App() {
       }}
       onCancel={() => setConfirmModal({ ...confirmModal, isOpen: false })}
     />
+
+    {/* Content Understanding Viewer Modal */}
+    {cuViewerModal.isOpen && cuViewerModal.result && (
+      <div 
+        onClick={() => setCuViewerModal({ ...cuViewerModal, isOpen: false })}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.6)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '2rem'
+        }}
+      >
+        <div 
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: 'white',
+            borderRadius: '2px',
+            width: '90%',
+            maxWidth: '1200px',
+            height: '90%',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxShadow: '0 8px 16px rgba(0,0,0,0.3)'
+          }}
+        >
+          {/* Header */}
+          <div style={{
+            padding: '16px 24px',
+            borderBottom: '1px solid #e0e0e0',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            background: '#f3f2f1'
+          }}>
+            <h3 style={{ margin: 0, color: '#323130', fontSize: '16px', fontWeight: 600 }}>
+              Content Understanding: {cuViewerModal.result.originalFilename}
+            </h3>
+            <button
+              onClick={() => setCuViewerModal({ ...cuViewerModal, isOpen: false })}
+              style={{
+                background: '#d13438',
+                color: 'white',
+                border: 'none',
+                borderRadius: '2px',
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 500
+              }}
+            >
+              Close
+            </button>
+          </div>
+
+          {/* View Mode Tabs */}
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            padding: '12px 24px',
+            borderBottom: '1px solid #e0e0e0',
+            background: '#faf9f8'
+          }}>
+            <button
+              onClick={() => setCuViewerModal({ ...cuViewerModal, viewMode: 'markdown' })}
+              style={{
+                padding: '8px 16px',
+                background: cuViewerModal.viewMode === 'markdown' ? '#0078d4' : 'transparent',
+                color: cuViewerModal.viewMode === 'markdown' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              📝 Markdown
+            </button>
+            <button
+              onClick={() => setCuViewerModal({ ...cuViewerModal, viewMode: 'json' })}
+              style={{
+                padding: '8px 16px',
+                background: cuViewerModal.viewMode === 'json' ? '#0078d4' : 'transparent',
+                color: cuViewerModal.viewMode === 'json' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              {} JSON
+            </button>
+            <button
+              onClick={() => setCuViewerModal({ ...cuViewerModal, viewMode: 'bounding-boxes' })}
+              style={{
+                padding: '8px 16px',
+                background: cuViewerModal.viewMode === 'bounding-boxes' ? '#0078d4' : 'transparent',
+                color: cuViewerModal.viewMode === 'bounding-boxes' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              📐 Bounding Boxes
+            </button>
+          </div>
+
+          {/* Content */}
+          <div style={{
+            flex: 1,
+            overflow: 'auto',
+            padding: '24px',
+            background: 'white'
+          }}>
+            {cuViewerModal.viewMode === 'markdown' && (
+              <div style={{
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'Consolas, "Courier New", monospace',
+                fontSize: '13px',
+                lineHeight: '1.6',
+                color: '#323130',
+                background: '#f3f2f1',
+                padding: '16px',
+                borderRadius: '2px'
+              }}>
+                {cuViewerModal.result.markdown || 'No markdown available'}
+              </div>
+            )}
+
+            {cuViewerModal.viewMode === 'json' && (
+              <pre style={{
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'Consolas, "Courier New", monospace',
+                fontSize: '12px',
+                lineHeight: '1.5',
+                color: '#323130',
+                background: '#f3f2f1',
+                padding: '16px',
+                borderRadius: '2px',
+                margin: 0
+              }}>
+                {JSON.stringify(cuViewerModal.result.fullResult || cuViewerModal.result, null, 2)}
+              </pre>
+            )}
+
+            {cuViewerModal.viewMode === 'bounding-boxes' && (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px'
+              }}>
+                {cuViewerModal.result.pages && cuViewerModal.result.pages.length > 0 ? (
+                  cuViewerModal.result.pages.map((page, pageIdx) => (
+                    <div key={pageIdx} style={{
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '2px',
+                      padding: '16px',
+                      background: '#faf9f8'
+                    }}>
+                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600 }}>
+                        Page {pageIdx + 1}
+                      </h4>
+                      {page.lines && page.lines.map((line, lineIdx) => (
+                        <div key={lineIdx} style={{
+                          marginBottom: '8px',
+                          padding: '8px',
+                          background: 'white',
+                          borderLeft: '3px solid #0078d4',
+                          fontSize: '13px'
+                        }}>
+                          <div style={{ fontWeight: 500, marginBottom: '4px', color: '#0078d4' }}>
+                            Line {lineIdx + 1}
+                          </div>
+                          <div style={{ marginBottom: '4px', color: '#323130' }}>
+                            {line.content}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#605e5c', fontFamily: 'Consolas, monospace' }}>
+                            {line.source}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ color: '#605e5c', fontSize: '13px' }}>
+                    No bounding box data available
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
     </>
   )
 }
