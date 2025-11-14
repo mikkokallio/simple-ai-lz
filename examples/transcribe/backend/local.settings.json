@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AZURE_OPENAI_ENDPOINT": "https://foundry-ezle7syi.openai.azure.com/",
+    "AZURE_OPENAI_DEPLOYMENT": "gpt-4o",
+    "COSMOS_DB_ENDPOINT": "https://cosmos-ailz-ezle7syi.documents.azure.com:443/",
+    "COSMOS_DB_DATABASE": "healthcare-triage",
+    "COSMOS_DB_CONTAINER": "draft-records",
+    "STORAGE_ACCOUNT_NAME": "stailzezle7syi",
+    "SPEECH_SERVICE_REGION": "swedencentral"
+  }
+}
