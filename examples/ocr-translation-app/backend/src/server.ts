@@ -19,6 +19,22 @@ import sharp from 'sharp';
 
 dotenv.config();
 
+// In-memory job tracker for long-running translation jobs
+interface TranslationJob {
+  jobId: string;
+  documentId: string;
+  userId: string;
+  originalFilename: string; // Store for preview URL construction
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  progress: string;
+  result?: any;
+  error?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const translationJobs = new Map<string, TranslationJob>();
+
 // Initialize Azure clients
 const credential = new DefaultAzureCredential();
 const storageAccountName = process.env.STORAGE_ACCOUNT_NAME || '';
@@ -432,6 +448,287 @@ app.get('/', (_req: Request, res: Response) => {
   });
 });
 
+// Helper function: Convert image buffer to PDF
+async function convertImageToPdf(imageBuffer: Buffer, originalFilename: string): Promise<{ pdfBuffer: Buffer, originalMimeType: string }> {
+  const ext = originalFilename.toLowerCase();
+  const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'];
+  
+  // Detect if it's an image
+  const isImage = imageExtensions.some(imgExt => ext.endsWith(imgExt));
+  if (!isImage) {
+    throw new Error('File is not a supported image format');
+  }
+  
+  console.log(`[IMAGE_TO_PDF] Converting ${originalFilename} to PDF`);
+  
+  // Determine original MIME type
+  let originalMimeType = 'image/png'; // default
+  if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) originalMimeType = 'image/jpeg';
+  else if (ext.endsWith('.gif')) originalMimeType = 'image/gif';
+  else if (ext.endsWith('.bmp')) originalMimeType = 'image/bmp';
+  else if (ext.endsWith('.tiff') || ext.endsWith('.tif')) originalMimeType = 'image/tiff';
+  else if (ext.endsWith('.webp')) originalMimeType = 'image/webp';
+  
+  // Use sharp to get image dimensions and convert to PNG (pdf-lib works best with PNG)
+  const imageMetadata = await sharp(imageBuffer).metadata();
+  const pngBuffer = await sharp(imageBuffer).png().toBuffer();
+  
+  // Create PDF with pdf-lib
+  const pdfDoc = await PDFDocument.create();
+  const image = await pdfDoc.embedPng(pngBuffer);
+  
+  // Calculate page size based on image dimensions (fit to A4 or use original if smaller)
+  const maxWidth = 595; // A4 width in points
+  const maxHeight = 842; // A4 height in points
+  const imgWidth = imageMetadata.width || maxWidth;
+  const imgHeight = imageMetadata.height || maxHeight;
+  
+  let pageWidth = imgWidth;
+  let pageHeight = imgHeight;
+  
+  // Scale down if image is larger than A4
+  if (imgWidth > maxWidth || imgHeight > maxHeight) {
+    const scale = Math.min(maxWidth / imgWidth, maxHeight / imgHeight);
+    pageWidth = imgWidth * scale;
+    pageHeight = imgHeight * scale;
+  }
+  
+  const page = pdfDoc.addPage([pageWidth, pageHeight]);
+  page.drawImage(image, {
+    x: 0,
+    y: 0,
+    width: pageWidth,
+    height: pageHeight
+  });
+  
+  const pdfBytes = await pdfDoc.save();
+  console.log(`[IMAGE_TO_PDF] Converted to PDF: ${pdfBytes.length} bytes`);
+  
+  return {
+    pdfBuffer: Buffer.from(pdfBytes),
+    originalMimeType
+  };
+}
+
+// Async background processing for Document Translation
+async function processDocumentTranslation(
+  jobId: string, 
+  documentId: string, 
+  metadata: DocumentMetadata, 
+  fileBuffer: Buffer, 
+  targetLang: string
+): Promise<void> {
+  const job = translationJobs.get(jobId);
+  if (!job) {
+    throw new Error(`Job ${jobId} not found`);
+  }
+
+  try {
+    if (!blobServiceClient || !documentTranslationClient) {
+      throw new Error('Storage or translation client not configured');
+    }
+
+    job.status = 'processing';
+    job.progress = 'Uploading source document...';
+    job.updatedAt = new Date();
+    
+    // Step 1: Upload file to source container in job-specific folder
+    const sourceContainerName = 'translation-source';
+    const targetContainerName = 'translation-target';
+    const sourceContainerClient = blobServiceClient.getContainerClient(sourceContainerName);
+    const targetContainerClient = blobServiceClient.getContainerClient(targetContainerName);
+    
+    const timestamp = Date.now();
+    const sourceFileName = `${timestamp}-${metadata.originalFilename}`;
+    const sourceBlobPath = `${jobId}/${sourceFileName}`; // Use jobId folder for source too
+    const sourceBlobClient = sourceContainerClient.getBlockBlobClient(sourceBlobPath);
+    
+    await sourceBlobClient.upload(fileBuffer, fileBuffer.length, {
+      blobHTTPHeaders: { blobContentType: metadata.mimeType || 'application/pdf' }
+    });
+    
+    console.log(`[JOB ${jobId}] Uploaded source file: ${sourceBlobPath}`);
+    
+    // Clean up any existing files in target folder (from previous translation attempts)
+    console.log(`[JOB ${jobId}] Cleaning up existing files in target folder: ${jobId}/`);
+    
+    let deletedCount = 0;
+    for await (const blob of targetContainerClient.listBlobsFlat({ prefix: `${jobId}/` })) {
+      await targetContainerClient.deleteBlob(blob.name);
+      deletedCount++;
+      console.log(`[JOB ${jobId}] Deleted existing target file: ${blob.name}`);
+    }
+    
+    if (deletedCount > 0) {
+      console.log(`[JOB ${jobId}] Cleaned up ${deletedCount} existing file(s) from target folder`);
+    }
+    
+    // Step 2: Submit translation job
+    // IMPORTANT: Document Translation needs container-level access, not folder-level
+    // We upload to job-specific folders but give the service the whole container URL
+    job.progress = 'Submitting to Azure Document Translation...';
+    job.updatedAt = new Date();
+    
+    const storageAccountUrl = `https://${storageAccountName}.blob.core.windows.net`;
+    const sourceUrl = `${storageAccountUrl}/${sourceContainerName}`; // Whole container (service needs container-level access)
+    const targetUrl = `${storageAccountUrl}/${targetContainerName}`; // Whole container
+    
+    console.log(`[JOB ${jobId}] Submitting translation job`);
+    console.log(`[JOB ${jobId}] Source URL: ${sourceUrl} (with prefix filter: ${jobId}/)`);
+    console.log(`[JOB ${jobId}] Target URL: ${targetUrl} (with prefix: ${jobId}/)`);
+    
+    const batchRequest = {
+      body: {
+        inputs: [{
+          source: {
+            sourceUrl: sourceUrl,
+            prefix: `${jobId}/`, // Filter to only files in this job's folder
+            storageSource: 'AzureBlob'
+          },
+          targets: [{
+            targetUrl: targetUrl,
+            prefix: `${jobId}/`, // Output to this job's folder
+            storageSource: 'AzureBlob',
+            language: targetLang
+          }]
+        }]
+      }
+    };
+    
+    const submitResult = await documentTranslationClient.path('/document/batches').post(batchRequest);
+    
+    if (isUnexpectedDoc(submitResult)) {
+      throw new Error(`Translation submission failed: ${submitResult.body.error?.message || 'Unknown error'}`);
+    }
+    
+    const operationLocation = submitResult.headers['operation-location'];
+    if (!operationLocation) {
+      throw new Error('No operation-location header in response');
+    }
+    
+    const operationId = operationLocation.split('/').pop()?.split('?')[0];
+    console.log(`[JOB ${jobId}] Azure operation ID: ${operationId}`);
+    
+    // Step 3: Poll for completion (max 5 minutes)
+    job.progress = 'Waiting for Azure to complete translation...';
+    job.updatedAt = new Date();
+    
+    const maxAttempts = 60;
+    let attempts = 0;
+    let translationStatus = 'NotStarted';
+    
+    while (attempts < maxAttempts && !['Succeeded', 'Failed', 'Cancelled'].includes(translationStatus)) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      const statusResult = await documentTranslationClient.path('/document/batches/{id}', operationId!).get();
+      
+      if (isUnexpectedDoc(statusResult)) {
+        throw new Error(`Status check failed: ${statusResult.body.error?.message || 'Unknown error'}`);
+      }
+      
+      translationStatus = statusResult.body.status;
+      attempts++;
+      
+      job.progress = `Translation in progress... (${translationStatus}, attempt ${attempts}/${maxAttempts})`;
+      job.updatedAt = new Date();
+      
+      console.log(`[JOB ${jobId}] Status: ${translationStatus} (${attempts}/${maxAttempts})`);
+      
+      // Log detailed error for ValidationFailed
+      if (translationStatus === 'ValidationFailed') {
+        console.error(`[JOB ${jobId}] ValidationFailed details:`, JSON.stringify(statusResult.body, null, 2));
+      }
+      
+      if (translationStatus === 'Failed') {
+        const errorInfo = statusResult.body.error;
+        throw new Error(`Translation failed: ${errorInfo?.message || JSON.stringify(errorInfo)}`);
+      }
+    }
+    
+    if (translationStatus !== 'Succeeded') {
+      throw new Error(`Translation timeout or failed with status: ${translationStatus}`);
+    }
+    
+    // Step 4: Download translated document
+    job.progress = 'Downloading translated document...';
+    job.updatedAt = new Date();
+    
+    // Look for the translated file in the jobId folder
+    const translatedBlobName = `${jobId}/${sourceFileName}`;
+    let translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
+    
+    const exists = await translatedBlobClient.exists();
+    if (!exists) {
+      console.log(`[JOB ${jobId}] Searching for translated file in target container folder: ${jobId}/...`);
+      const targetBlobs = [];
+      for await (const blob of targetContainerClient.listBlobsFlat({ prefix: `${jobId}/` })) {
+        targetBlobs.push(blob);
+      }
+      
+      if (targetBlobs.length === 0) {
+        throw new Error(`Translated document not found in target container folder: ${jobId}/`);
+      }
+      
+      // Use the first blob found in the jobId folder
+      translatedBlobClient = targetContainerClient.getBlockBlobClient(targetBlobs[0].name);
+    }
+    
+    console.log(`[JOB ${jobId}] Downloading: ${translatedBlobClient.name}`);
+    const downloadResponse = await translatedBlobClient.download();
+    
+    const chunks: Buffer[] = [];
+    for await (const chunk of downloadResponse.readableStreamBody!) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const translatedBuffer = Buffer.concat(chunks);
+    
+    // Step 5: Save to workspace
+    job.progress = 'Saving to workspace...';
+    job.updatedAt = new Date();
+    
+    const translatedFilename = `translated-${targetLang}-${metadata.originalFilename}`;
+    const workspaceContainerClient = blobServiceClient.getContainerClient('workspace');
+    const translatedWorkspaceBlobName = `${metadata.userId}/${documentId}/translated/${translatedFilename}`;
+    const workspaceBlobClient = workspaceContainerClient.getBlockBlobClient(translatedWorkspaceBlobName);
+    
+    await workspaceBlobClient.uploadData(translatedBuffer, {
+      blobHTTPHeaders: { blobContentType: metadata.mimeType || 'application/pdf' }
+    });
+    
+    console.log(`[JOB ${jobId}] Saved to workspace: ${translatedWorkspaceBlobName}`);
+    
+    // Complete the job
+    const result = {
+      service: 'Azure Document Translation',
+      serviceDescription: 'Format-preserving batch document translation',
+      targetLanguage: targetLang,
+      originalFilename: metadata.originalFilename,
+      translatedFilename,
+      translatedDocumentUrl: `/api/workspace/${documentId}/translated/${translatedFilename}`,
+      message: `Document translated to ${targetLang} with format preserved`
+    };
+    
+    await saveResultToWorkspace(metadata.userId, documentId, 'document-translate', result);
+    
+    job.status = 'completed';
+    job.result = result;
+    job.progress = 'Translation completed successfully';
+    job.updatedAt = new Date();
+    
+    console.log(`[JOB ${jobId}] Completed successfully`);
+    
+  } catch (error) {
+    console.error(`[JOB ${jobId}] Error:`, error);
+    job.status = 'failed';
+    job.error = error instanceof Error ? error.message : 'Unknown error';
+    job.progress = 'Translation failed';
+    job.updatedAt = new Date();
+    throw error;
+  }
+}
+
+// === API ROUTES ===
+
 // Workspace API endpoints
 
 // Upload document to workspace
@@ -810,6 +1107,122 @@ app.get('/api/workspace/:documentId/results/:mode', async (req: Request, res: Re
   }
 });
 
+// Get translation job status
+app.get('/api/translation-job/:jobId', async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+    const job = translationJobs.get(jobId);
+    
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Job not found'
+      });
+    }
+    
+    res.json({
+      status: 'success',
+      job: {
+        jobId: job.jobId,
+        documentId: job.documentId,
+        status: job.status,
+        progress: job.progress,
+        result: job.result,
+        error: job.error,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Get job status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to get job status'
+    });
+  }
+});
+
+// Preview translated PDF (streams from blob storage using managed identity)
+app.get('/api/translation-job/:jobId/preview', async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+    const job = translationJobs.get(jobId);
+    
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Job not found'
+      });
+    }
+    
+    if (job.status !== 'completed') {
+      return res.status(400).json({
+        status: 'error',
+        message: `Translation not ready. Current status: ${job.status}`
+      });
+    }
+    
+    console.log(`[PREVIEW] Streaming PDF for job ${jobId}`);
+    
+    // Get blob storage clients (using managed identity)
+    const credential = new DefaultAzureCredential();
+    const blobServiceClient = new BlobServiceClient(
+      `https://${process.env.STORAGE_ACCOUNT_NAME}.blob.core.windows.net`,
+      credential
+    );
+    
+    const targetContainerClient = blobServiceClient.getContainerClient('translation-target');
+    
+    // Find the translated blob (same logic as download)
+    const timestamp = new Date(job.createdAt).toISOString().replace(/[-:]/g, '').split('.')[0];
+    const sourceFileName = `${timestamp}-${job.originalFilename}`;
+    const translatedBlobName = `${jobId}/${sourceFileName}`;
+    
+    let translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
+    
+    const exists = await translatedBlobClient.exists();
+    if (!exists) {
+      console.log(`[PREVIEW] Searching for translated file in target container folder: ${jobId}/...`);
+      const targetBlobs = [];
+      for await (const blob of targetContainerClient.listBlobsFlat({ prefix: `${jobId}/` })) {
+        targetBlobs.push(blob);
+      }
+      
+      if (targetBlobs.length === 0) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Translated document not found in target container folder: ${jobId}/`
+        });
+      }
+      
+      translatedBlobClient = targetContainerClient.getBlockBlobClient(targetBlobs[0].name);
+    }
+    
+    console.log(`[PREVIEW] Streaming blob: ${translatedBlobClient.name}`);
+    
+    // Stream the PDF directly to the browser
+    const downloadResponse = await translatedBlobClient.download();
+    
+    // Set headers for inline PDF display - must be done BEFORE piping
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline',
+      'Cache-Control': 'private, max-age=3600'
+      // Explicitly NOT setting X-Frame-Options
+    });
+    
+    // Pipe the blob stream to the response
+    downloadResponse.readableStreamBody!.pipe(res);
+    
+  } catch (error) {
+    console.error('[PREVIEW] Error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Failed to preview PDF'
+    });
+  }
+});
+
 // Process document from workspace
 app.post('/api/workspace/:documentId/process', async (req: Request, res: Response) => {
   try {
@@ -855,6 +1268,31 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
     const downloadResponse = await originalBlobClient.download();
     const fileBuffer = await streamToBuffer(downloadResponse.readableStreamBody!);
     
+    // Convert image to PDF if needed (for document-translate mode)
+    let processBuffer = fileBuffer;
+    let processMimeType = metadata.mimeType;
+    
+    if (mode === 'document-translate') {
+      const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'];
+      const isImage = imageExtensions.some(ext => metadata.originalFilename.toLowerCase().endsWith(ext));
+      
+      if (isImage) {
+        console.log(`[PROCESS] Image file detected for document-translate: ${metadata.originalFilename}, converting to PDF`);
+        try {
+          const { pdfBuffer, originalMimeType } = await convertImageToPdf(fileBuffer, metadata.originalFilename);
+          processBuffer = pdfBuffer;
+          processMimeType = 'application/pdf';
+          console.log(`[PROCESS] Successfully converted ${metadata.originalFilename} to PDF`);
+        } catch (conversionError: any) {
+          console.error('[PROCESS] Image to PDF conversion failed:', conversionError.message);
+          return res.status(500).json({ 
+            status: 'error', 
+            message: `Failed to convert image to PDF: ${conversionError.message}` 
+          });
+        }
+      }
+    }
+    
     // Process the document based on mode - 6 distinct tools
     let result: any;
     
@@ -867,12 +1305,34 @@ app.post('/api/workspace/:documentId/process', async (req: Request, res: Respons
       const poller = await documentAnalysisClient.beginAnalyzeDocument('prebuilt-read', fileBuffer);
       const analysisResult = await poller.pollUntilDone();
       
+      // Extract rich data: pages, lines, words
+      const pages = analysisResult.pages?.map((page: any) => ({
+        pageNumber: page.pageNumber,
+        width: page.width,
+        height: page.height,
+        angle: page.angle,
+        unit: page.unit,
+        lines: page.lines?.map((line: any) => ({
+          content: line.content,
+          polygon: line.polygon,
+          spans: line.spans
+        })),
+        words: page.words?.map((word: any) => ({
+          content: word.content,
+          polygon: word.polygon,
+          confidence: word.confidence,
+          spans: word.spans
+        }))
+      })) || [];
+      
       result = {
         service: 'Azure Document Intelligence',
         serviceDescription: 'Microsoft OCR optimized for forms and structured documents',
         model: 'prebuilt-read',
         text: analysisResult.content || '',
-        pageCount: analysisResult.pages?.length || 0
+        pageCount: analysisResult.pages?.length || 0,
+        pages: pages,
+        fullResult: analysisResult
       };
       
       await saveResultToWorkspace(metadata.userId, documentId, 'ocr-di', result, undefined, outputFormat || 'json');
@@ -1102,6 +1562,7 @@ For PDFs, please use:
       
     } else if (mode === 'document-translate') {
       // Tool 6: Azure Document Translation - format-preserving batch translation using SDK
+      // This is a long-running async operation - submit job and return immediately
       if (!blobServiceClient || !documentTranslationClient) {
         return res.status(500).json({ 
           status: 'error', 
@@ -1110,158 +1571,44 @@ For PDFs, please use:
       }
 
       const targetLang = targetLanguage || 'en';
-      console.log(`[DOCUMENT_TRANSLATE] Starting document translation to ${targetLang}`);
+      console.log(`[DOCUMENT_TRANSLATE] Starting async document translation to ${targetLang}`);
       
-      // Step 1: Upload file to source container
-      const sourceContainerName = 'translation-source';
-      const targetContainerName = 'translation-target';
-      const sourceContainerClient = blobServiceClient.getContainerClient(sourceContainerName);
-      const targetContainerClient = blobServiceClient.getContainerClient(targetContainerName);
+      // Create a job ID for tracking
+      const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(7)}`;
       
-      const timestamp = Date.now();
-      const sourceFileName = `${timestamp}-${metadata.originalFilename}`;
-      const sourceBlobClient = sourceContainerClient.getBlockBlobClient(sourceFileName);
-      
-      await sourceBlobClient.upload(fileBuffer, fileBuffer.length, {
-        blobHTTPHeaders: { blobContentType: metadata.mimeType || 'application/pdf' }
-      });
-      
-      console.log(`[DOCUMENT_TRANSLATE] Uploaded source file: ${sourceFileName}`);
-      
-      // Step 2: Submit translation job using SDK (managed identity)
-      const storageAccountUrl = `https://${storageAccountName}.blob.core.windows.net`;
-      const sourceUrl = `${storageAccountUrl}/${sourceContainerName}`;
-      const targetUrl = `${storageAccountUrl}/${targetContainerName}`;
-      
-      console.log(`[DOCUMENT_TRANSLATE] Submitting translation job via SDK`);
-      console.log(`[DOCUMENT_TRANSLATE] Source: ${sourceUrl}`);
-      console.log(`[DOCUMENT_TRANSLATE] Target: ${targetUrl}`);
-      
-      const batchRequest = {
-        body: {
-          inputs: [{
-            source: {
-              sourceUrl: sourceUrl
-            },
-            targets: [{
-              targetUrl: targetUrl,
-              language: targetLang
-            }]
-          }]
-        }
+      // Create job entry
+      const job: TranslationJob = {
+        jobId,
+        documentId,
+        userId: metadata.userId,
+        originalFilename: metadata.originalFilename,
+        status: 'pending',
+        progress: 'Initializing translation job...',
+        createdAt: new Date(),
+        updatedAt: new Date()
       };
+      translationJobs.set(jobId, job);
       
-      const submitResult = await documentTranslationClient.path('/document/batches').post(batchRequest);
-      
-      if (isUnexpectedDoc(submitResult)) {
-        console.error(`[DOCUMENT_TRANSLATE] SDK submission failed:`, submitResult.body);
-        throw new Error(`Document translation submission failed: ${submitResult.body.error?.message || 'Unknown error'}`);
-      }
-      
-      const operationLocation = submitResult.headers['operation-location'];
-      if (!operationLocation) {
-        throw new Error('No operation-location header in SDK response');
-      }
-      
-      const operationId = operationLocation.split('/').pop()?.split('?')[0];
-      console.log(`[DOCUMENT_TRANSLATE] Translation job ID: ${operationId}`);
-      
-      // Step 3: Poll for completion (max 5 minutes)
-      const maxAttempts = 60;
-      let attempts = 0;
-      let translationStatus = 'NotStarted';
-      
-      while (attempts < maxAttempts && !['Succeeded', 'Failed', 'Cancelled'].includes(translationStatus)) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        const statusResult = await documentTranslationClient.path('/document/batches/{id}', operationId!).get();
-        
-        if (isUnexpectedDoc(statusResult)) {
-          console.error(`[DOCUMENT_TRANSLATE] Status check failed:`, statusResult.body);
-          break;
+      // Start async processing (don't await)
+      processDocumentTranslation(jobId, documentId, metadata, processBuffer, targetLang).catch(err => {
+        console.error(`[DOCUMENT_TRANSLATE] Job ${jobId} failed:`, err);
+        const failedJob = translationJobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'failed';
+          failedJob.error = err.message;
+          failedJob.updatedAt = new Date();
         }
-        
-        translationStatus = statusResult.body.status;
-        console.log(`[DOCUMENT_TRANSLATE] Status: ${translationStatus} (${attempts + 1}/${maxAttempts})`);
-        
-        if (translationStatus === 'Failed') {
-          const errorInfo = statusResult.body.error;
-          console.error(`[DOCUMENT_TRANSLATE] Translation failed:`, errorInfo);
-          throw new Error(`Translation failed: ${errorInfo?.message || JSON.stringify(errorInfo)}`);
-        }
-        
-        attempts++;
-      }
-      
-      if (translationStatus !== 'Succeeded') {
-        throw new Error(`Translation timeout or failed with status: ${translationStatus}`);
-      }
-      
-      // Step 4: Find and download translated document
-      // The translated file will have the same name as source file in target container
-      // Azure Translator preserves the filename structure
-      let translatedBlobName = sourceFileName; // Same name as source
-      let translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
-      
-      // Check if translated file exists
-      const exists = await translatedBlobClient.exists();
-      if (!exists) {
-        // If not found with same name, list all blobs to find it
-        console.log(`[DOCUMENT_TRANSLATE] Searching for translated file in target container...`);
-        const targetBlobs = [];
-        for await (const blob of targetContainerClient.listBlobsFlat()) {
-          targetBlobs.push(blob);
-          console.log(`[DOCUMENT_TRANSLATE] Found blob: ${blob.name}`);
-        }
-        
-        if (targetBlobs.length === 0) {
-          throw new Error('Translated document not found in target container');
-        }
-        
-        // Find the most recent blob (highest timestamp)
-        const sortedBlobs = targetBlobs.sort((a, b) => {
-          const timeA = parseInt(a.name.split('-')[0]) || 0;
-          const timeB = parseInt(b.name.split('-')[0]) || 0;
-          return timeB - timeA;
-        });
-        
-        console.log(`[DOCUMENT_TRANSLATE] Using most recent file: ${sortedBlobs[0].name}`);
-        translatedBlobName = sortedBlobs[0].name;
-        translatedBlobClient = targetContainerClient.getBlockBlobClient(translatedBlobName);
-      }
-      
-      console.log(`[DOCUMENT_TRANSLATE] Downloading translated file: ${translatedBlobName}`);
-      const downloadResponse = await translatedBlobClient.download();
-      
-      const chunks: Buffer[] = [];
-      for await (const chunk of downloadResponse.readableStreamBody!) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const translatedBuffer = Buffer.concat(chunks);
-      
-      // Step 5: Save to workspace
-      const translatedFilename = `translated-${targetLang}-${metadata.originalFilename}`;
-      const workspaceContainerClient = blobServiceClient.getContainerClient('workspace');
-      const translatedWorkspaceBlobName = `${metadata.userId}/${documentId}/translated/${translatedFilename}`;
-      const workspaceBlobClient = workspaceContainerClient.getBlockBlobClient(translatedWorkspaceBlobName);
-      
-      await workspaceBlobClient.uploadData(translatedBuffer, {
-        blobHTTPHeaders: { blobContentType: metadata.mimeType || 'application/pdf' }
       });
       
-      console.log(`[DOCUMENT_TRANSLATE] Saved to workspace: ${translatedWorkspaceBlobName}`);
-      
+      // Return immediately with job ID
       result = {
         service: 'Azure Document Translation',
-        serviceDescription: 'Format-preserving batch document translation',
+        serviceDescription: 'Format-preserving batch document translation (async)',
         targetLanguage: targetLang,
-        originalFilename: metadata.originalFilename,
-        translatedFilename,
-        translatedDocumentUrl: `/api/workspace/${documentId}/translated/${translatedFilename}`,
-        message: `Document translated to ${targetLang} with format preserved`
+        jobId,
+        status: 'pending',
+        message: 'Translation job started. Poll /api/translation-job/:jobId for status.'
       };
-      
-      await saveResultToWorkspace(metadata.userId, documentId, 'document-translate', result);
       
     } else {
       // Analyze mode - just return basic info

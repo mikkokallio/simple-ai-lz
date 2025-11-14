@@ -66,6 +66,7 @@ export function BoundingBoxViewer({ pages, documentId, userId }: BoundingBoxView
   const [imageLoaded, setImageLoaded] = useState(false)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   // Load document metadata to get original filename
   useEffect(() => {
@@ -94,16 +95,26 @@ export function BoundingBoxViewer({ pages, documentId, userId }: BoundingBoxView
 
   // Draw bounding boxes on canvas
   useEffect(() => {
-    if (!imageUrl || !imageLoaded || !canvasRef.current || !pages[selectedPage]) return
+    if (!imageUrl || !canvasRef.current || !pages[selectedPage]) return
 
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    console.log('BoundingBoxViewer: Starting to load image and draw boxes')
+    console.log('Image URL:', imageUrl)
+    console.log('Page data:', pages[selectedPage])
+    console.log('Number of lines:', pages[selectedPage]?.lines?.length || 0)
+
+    setLoading(true)
+    setImageLoaded(false)
+
     const img = new Image()
     img.crossOrigin = 'anonymous'
     
     img.onload = () => {
+      console.log('Image loaded successfully:', img.width, 'x', img.height)
+      
       // Set canvas size to match image
       canvas.width = img.width
       canvas.height = img.height
@@ -112,18 +123,33 @@ export function BoundingBoxViewer({ pages, documentId, userId }: BoundingBoxView
       ctx.drawImage(img, 0, 0)
 
       const page = pages[selectedPage]
-      if (!page.lines) return
+      if (!page.lines || page.lines.length === 0) {
+        console.log('No lines to draw')
+        setImageLoaded(true)
+        setLoading(false)
+        return
+      }
+
+      console.log(`Drawing ${page.lines.length} bounding boxes`)
 
       // Draw bounding boxes for each line
       page.lines.forEach((line, idx) => {
         const sourcePolygon = parsePolygon(line.source)
-        if (sourcePolygon.length < 3) return
+        if (sourcePolygon.length < 3) {
+          console.log(`Line ${idx}: Invalid polygon (${sourcePolygon.length} points)`)
+          return
+        }
 
         // Convert normalized coordinates to pixel coordinates
         const polygon = sourcePolygon.map(point => ({
           x: point.x * img.width,
           y: point.y * img.height
         }))
+
+        if (idx === 0) {
+          console.log(`First line polygon (normalized):`, sourcePolygon.slice(0, 2))
+          console.log(`First line polygon (pixels):`, polygon.slice(0, 2))
+        }
 
         // Draw polygon
         ctx.beginPath()
@@ -136,18 +162,30 @@ export function BoundingBoxViewer({ pages, documentId, userId }: BoundingBoxView
         // Style based on line index (cycle through colors)
         const colors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ffff00']
         ctx.strokeStyle = colors[idx % colors.length]
-        ctx.lineWidth = 2
+        ctx.lineWidth = 3
         ctx.stroke()
 
-        // Draw line number label
+        // Draw line number label with background
+        ctx.fillStyle = 'white'
+        ctx.fillRect(polygon[0].x - 2, polygon[0].y - 18, 20, 16)
         ctx.fillStyle = colors[idx % colors.length]
         ctx.font = 'bold 12px Arial'
         ctx.fillText(`${idx + 1}`, polygon[0].x, polygon[0].y - 5)
       })
+
+      console.log('Bounding boxes drawn successfully')
+      setImageLoaded(true)
+      setLoading(false)
+    }
+
+    img.onerror = (e) => {
+      console.error('Image load error:', e)
+      setError('Failed to load image')
+      setLoading(false)
     }
 
     img.src = imageUrl
-  }, [imageUrl, imageLoaded, selectedPage, pages])
+  }, [imageUrl, selectedPage, pages])
 
   if (!documentId || !userId) {
     return (
@@ -237,16 +275,9 @@ export function BoundingBoxViewer({ pages, documentId, userId }: BoundingBoxView
         alignItems: 'flex-start',
         padding: '20px'
       }}>
-        {!imageLoaded && imageUrl && (
+        {loading && (
           <div style={{ color: '#605e5c', fontSize: '14px', padding: '40px' }}>
-            Loading image...
-            <img 
-              src={imageUrl}
-              alt="Loading"
-              style={{ display: 'none' }}
-              onLoad={() => setImageLoaded(true)}
-              onError={() => setError('Failed to load image')}
-            />
+            Loading image and drawing bounding boxes...
           </div>
         )}
         <canvas

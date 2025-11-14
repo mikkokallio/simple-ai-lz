@@ -61,18 +61,30 @@ interface ProcessedResult {
   translatedDocumentUrl?: string
   service?: string
   error?: string
+  // Document Intelligence specific fields
+  text?: string
+  model?: string
+  pageCount?: number
   // Content Understanding specific fields
   markdown?: string
   pages?: Array<{
-    lines: Array<{
+    pageNumber?: number
+    width?: number
+    height?: number
+    angle?: number
+    unit?: string
+    lines?: Array<{
       content: string
-      source: string
+      source?: string
+      polygon?: any
       spans?: Array<{ offset: number; length: number }>
     }>
     words?: Array<{
       content: string
-      source: string
+      source?: string
+      polygon?: any
       confidence?: number
+      spans?: Array<{ offset: number; length: number }>
     }>
   }>
   fullResult?: any
@@ -100,6 +112,19 @@ function App() {
   // Step 3: Processed results
   const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([])
   
+  // PDF Preview state
+  const [pdfPreview, setPdfPreview] = useState<{
+    isOpen: boolean
+    jobId: string | null
+    filename: string | null
+    blobUrl: string | null
+  }>({
+    isOpen: false,
+    jobId: null,
+    filename: null,
+    blobUrl: null
+  })
+  
   // Modal state
   const [messageModal, setMessageModal] = useState<{
     isOpen: boolean
@@ -124,14 +149,23 @@ function App() {
     userId: string | null
   }>({ isOpen: false, result: null, viewMode: 'markdown', documentId: null, userId: null })
   
+  // Document Intelligence viewer state
+  const [diViewerModal, setDiViewerModal] = useState<{
+    isOpen: boolean
+    result: ProcessedResult | null
+    viewMode: 'text' | 'pages' | 'json' | 'bounding-boxes'
+    documentId: string | null
+    userId: string | null
+  }>({ isOpen: false, result: null, viewMode: 'text', documentId: null, userId: null })
+  
   // UI state
   const [isDragging, setIsDragging] = useState(false)
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('ocr-di')
   const [systemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPTS['ocr-openai'])
   const [targetLanguage, setTargetLanguage] = useState<string>('en')
-  const [outputFormat, setOutputFormat] = useState<string>('json')
   const [previewDocument, setPreviewDocument] = useState<WorkspaceDocument | null>(null)
-  const [activeTab, setActiveTab] = useState<'workspace' | 'results'>('workspace')
+  const [activeTab, setActiveTab] = useState<'upload' | 'workspace' | 'results'>('upload')
+  const [flashingTab, setFlashingTab] = useState<string | null>(null)
 
   // Helper functions for modals
   const showMessage = (title: string, message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
@@ -144,6 +178,10 @@ function App() {
 
   const showContentUnderstandingResult = (result: ProcessedResult, documentId: string, userId: string) => {
     setCuViewerModal({ isOpen: true, result, viewMode: 'markdown', documentId, userId })
+  }
+
+  const showDocumentIntelligenceResult = (result: ProcessedResult, documentId: string, userId: string) => {
+    setDiViewerModal({ isOpen: true, result, viewMode: 'text', documentId, userId })
   }
 
   useEffect(() => {
@@ -345,6 +383,11 @@ function App() {
       // Reload workspace documents
       await loadWorkspaceDocuments()
       
+      // Switch to workspace tab with flash effect
+      setActiveTab('workspace')
+      setFlashingTab('workspace')
+      setTimeout(() => setFlashingTab(null), 1000) // Flash for 1 second
+      
       showMessage('Upload Successful', `${selectedFiles.length} file(s) uploaded successfully!`, 'success')
     } catch (error) {
       showMessage('Upload Failed', `${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
@@ -362,6 +405,26 @@ function App() {
       return
     }
 
+    // Check for image files if using document-translate mode
+    if (processingMode === 'document-translate') {
+      const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp']
+      const imageFiles = selectedDocs.filter(doc => 
+        imageExtensions.some(ext => doc.originalFilename.toLowerCase().endsWith(ext))
+      )
+      
+      if (imageFiles.length > 0) {
+        const imageNames = imageFiles.map(f => f.originalFilename).join(', ')
+        const confirmed = window.confirm(
+          `Document Translation requires PDF format.\n\n${imageFiles.length} image file(s) detected:\n${imageNames}\n\nConvert these images to PDF before translation?\n\nClick OK to convert and continue, or Cancel to abort.`
+        )
+        
+        if (!confirmed) {
+          showMessage('Processing Cancelled', 'Document translation requires PDF format. Please use "Translate: Doc Intelligence + Text Translator" for image files.', 'warning')
+          return
+        }
+      }
+    }
+
     setIsProcessing(true)
     
     try {
@@ -373,8 +436,7 @@ function App() {
           body: JSON.stringify({
             mode: processingMode,
             targetLanguage: (processingMode.includes('translate') || processingMode === 'document-translate') ? targetLanguage : undefined,
-            systemPrompt: processingMode.includes('openai') ? systemPrompt : undefined,
-            outputFormat: outputFormat
+            systemPrompt: processingMode.includes('openai') ? systemPrompt : undefined
           })
         })
         
@@ -383,15 +445,78 @@ function App() {
           throw new Error(errorData.message || `Processing failed for ${doc.originalFilename}`)
         }
 
-        await response.json()
-        // Don't manually add to results - we'll reload from storage
+        const data = await response.json()
+        
+        // If document-translate, poll for job completion
+        if (processingMode === 'document-translate' && data.result?.jobId) {
+          const jobId = data.result.jobId
+          console.log(`[TRANSLATE] Job ${jobId} started for ${doc.originalFilename}`)
+          
+          // Poll every 3 seconds for up to 6 minutes
+          const maxAttempts = 120
+          let attempts = 0
+          let jobCompleted = false
+          
+          while (attempts < maxAttempts && !jobCompleted) {
+            await new Promise(resolve => setTimeout(resolve, 3000))
+            
+            const statusResponse = await fetch(`${API_BASE_URL}/api/translation-job/${jobId}`, {
+              credentials: 'include'
+            })
+            
+            if (!statusResponse.ok) {
+              throw new Error('Failed to check translation job status')
+            }
+            
+            const statusData = await statusResponse.json()
+            const job = statusData.job
+            
+            console.log(`[TRANSLATE] Job ${jobId} status: ${job.status} - ${job.progress}`)
+            
+            if (job.status === 'completed') {
+              jobCompleted = true
+              console.log(`[TRANSLATE] Job ${jobId} completed successfully`)
+              
+              // Fetch PDF as blob to avoid X-Frame-Options issue
+              try {
+                const pdfResponse = await fetch(`${API_BASE_URL}/api/translation-job/${jobId}/preview`)
+                if (!pdfResponse.ok) {
+                  throw new Error('Failed to fetch PDF')
+                }
+                const pdfBlob = await pdfResponse.blob()
+                const blobUrl = URL.createObjectURL(pdfBlob)
+                
+                // Show PDF preview with blob URL
+                setPdfPreview({
+                  isOpen: true,
+                  jobId: jobId,
+                  filename: doc.originalFilename,
+                  blobUrl: blobUrl
+                })
+              } catch (error) {
+                console.error('[TRANSLATE] Failed to load PDF preview:', error)
+                // Still show success but without preview
+              }
+            } else if (job.status === 'failed') {
+              throw new Error(`Translation failed: ${job.error || 'Unknown error'}`)
+            }
+            
+            attempts++
+          }
+          
+          if (!jobCompleted) {
+            throw new Error('Translation job timeout - please check results later')
+          }
+        }
       }
 
       // Reload workspace to update processed modes
       await loadWorkspaceDocuments()
       
-      // Switch to results tab
+      // Switch to results tab with flash effect
       setActiveTab('results')
+      setFlashingTab('results')
+      setTimeout(() => setFlashingTab(null), 1000) // Flash for 1 second
       
       showMessage('Processing Complete', `${selectedDocs.length} document(s) processed successfully!`, 'success')
     } catch (error) {
@@ -431,6 +556,12 @@ function App() {
 
   return (
     <>
+    <style>{`
+      @keyframes flash {
+        0%, 100% { background-color: white; }
+        50% { background-color: #e6f3ff; }
+      }
+    `}</style>
     <div style={{ 
       minHeight: '100vh', 
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -460,128 +591,6 @@ function App() {
           )}
         </div>
 
-        {/* Step 1: File Selection & Upload */}
-        <div style={{ 
-          background: 'white', 
-          padding: '2rem', 
-          borderRadius: '2px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          marginBottom: '2rem'
-        }}>
-          <h2 style={{ margin: '0 0 1.5rem 0', color: '#323130', fontSize: '20px', fontWeight: '600' }}>
-            📤 Step 1: Select Files to Upload
-          </h2>
-          
-          {/* Drag & Drop Area */}
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            style={{
-              border: `2px dashed ${isDragging ? '#0078d4' : '#d1d1d1'}`,
-              borderRadius: '2px',
-              padding: '3rem',
-              textAlign: 'center',
-              background: isDragging ? '#f3f2f1' : '#fafafa',
-              transition: 'all 0.2s',
-              cursor: 'pointer',
-              marginBottom: '1.5rem'
-            }}
-          >
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📁</div>
-            <p style={{ fontSize: '16px', color: '#323130', marginBottom: '1rem', fontWeight: 500 }}>
-              Drag and drop files here
-            </p>
-            <p style={{ fontSize: '13px', color: '#605e5c', marginBottom: '1.5rem' }}>
-              or
-            </p>
-            <label style={{
-              background: '#0078d4',
-              color: 'white',
-              padding: '8px 24px',
-              borderRadius: '2px',
-              cursor: 'pointer',
-              display: 'inline-block',
-              fontWeight: 600,
-              fontSize: '14px',
-              transition: 'background 0.2s'
-            }}>
-              Browse Files
-              <input
-                type="file"
-                multiple
-                onChange={handleFileSelect}
-                style={{ display: 'none' }}
-                accept=".pdf,.png,.jpg,.jpeg"
-              />
-            </label>
-          </div>
-
-          {/* Selected Files List */}
-          {selectedFiles.length > 0 && (
-            <div>
-              <h3 style={{ margin: '0 0 1rem 0', color: '#323130', fontSize: '16px', fontWeight: 600 }}>
-                Selected Files ({selectedFiles.length})
-              </h3>
-              <div style={{ display: 'grid', gap: '8px', marginBottom: '1.5rem' }}>
-                {selectedFiles.map(file => (
-                  <div key={file.id} style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '12px',
-                    background: 'white',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '2px'
-                  }}>
-                    <span style={{ fontSize: '20px' }}>📄</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 500, color: '#323130', fontSize: '13px' }}>{file.file.name}</div>
-                      <div style={{ fontSize: '12px', color: '#605e5c' }}>
-                        {(file.file.size / 1024).toFixed(1)} KB
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => removeSelectedFile(file.id)}
-                      style={{
-                        background: '#d13438',
-                        color: 'white',
-                        border: 'none',
-                        padding: '6px 16px',
-                        borderRadius: '2px',
-                        cursor: 'pointer',
-                        fontWeight: 500,
-                        fontSize: '13px'
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              <button
-                onClick={uploadAndScanFiles}
-                disabled={isUploading}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: isUploading ? '#a19f9d' : '#107c10',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '2px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: isUploading ? 'not-allowed' : 'pointer',
-                  transition: 'background 0.2s'
-                }}
-              >
-                {isUploading ? '⏳ Uploading...' : `🚀 Upload ${selectedFiles.length} File(s)`}
-              </button>
-            </div>
-          )}
-        </div>
-
         {/* Tab Navigation */}
         <div style={{ 
           display: 'flex', 
@@ -591,17 +600,35 @@ function App() {
           borderBottom: '1px solid #e0e0e0'
         }}>
           <button
+            onClick={() => setActiveTab('upload')}
+            style={{
+              padding: '12px 24px',
+              background: activeTab === 'upload' ? (flashingTab === 'upload' ? '#e6f3ff' : 'white') : 'white',
+              color: '#323130',
+              border: 'none',
+              borderBottom: activeTab === 'upload' ? '2px solid #0078d4' : '2px solid transparent',
+              fontSize: '14px',
+              fontWeight: activeTab === 'upload' ? 600 : 400,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              animation: flashingTab === 'upload' ? 'flash 0.5s ease-in-out 2' : 'none'
+            }}
+          >
+            📤 Select Files to Upload
+          </button>
+          <button
             onClick={() => setActiveTab('workspace')}
             style={{
               padding: '12px 24px',
-              background: 'white',
+              background: activeTab === 'workspace' ? (flashingTab === 'workspace' ? '#e6f3ff' : 'white') : 'white',
               color: '#323130',
               border: 'none',
               borderBottom: activeTab === 'workspace' ? '2px solid #0078d4' : '2px solid transparent',
               fontSize: '14px',
               fontWeight: activeTab === 'workspace' ? 600 : 400,
               cursor: 'pointer',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              animation: flashingTab === 'workspace' ? 'flash 0.5s ease-in-out 2' : 'none'
             }}
           >
             📁 My Documents ({workspaceDocuments.length})
@@ -610,21 +637,140 @@ function App() {
             onClick={() => setActiveTab('results')}
             style={{
               padding: '12px 24px',
-              background: 'white',
+              background: activeTab === 'results' ? (flashingTab === 'results' ? '#e6f3ff' : 'white') : 'white',
               color: '#323130',
               border: 'none',
               borderBottom: activeTab === 'results' ? '2px solid #0078d4' : '2px solid transparent',
               fontSize: '14px',
               fontWeight: activeTab === 'results' ? 600 : 400,
               cursor: 'pointer',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              animation: flashingTab === 'results' ? 'flash 0.5s ease-in-out 2' : 'none'
             }}
           >
             📊 Results ({processedResults.length})
           </button>
         </div>
 
-        {/* Step 2: My Documents (Workspace) */}
+        {/* Upload Tab */}
+        {activeTab === 'upload' && (
+          <div style={{ 
+            background: 'white', 
+            padding: '2rem', 
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+          }}>
+            {/* Drag & Drop Area */}
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              style={{
+                border: `2px dashed ${isDragging ? '#0078d4' : '#d1d1d1'}`,
+                borderRadius: '2px',
+                padding: '3rem',
+                textAlign: 'center',
+                background: isDragging ? '#f3f2f1' : '#fafafa',
+                transition: 'all 0.2s',
+                cursor: 'pointer',
+                marginBottom: '1.5rem'
+              }}
+            >
+              <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📁</div>
+              <p style={{ fontSize: '16px', color: '#323130', marginBottom: '1rem', fontWeight: 500 }}>
+                Drag and drop files here
+              </p>
+              <p style={{ fontSize: '13px', color: '#605e5c', marginBottom: '1.5rem' }}>
+                or
+              </p>
+              <label style={{
+                background: '#0078d4',
+                color: 'white',
+                padding: '8px 24px',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                display: 'inline-block',
+                fontWeight: 600,
+                fontSize: '14px',
+                transition: 'background 0.2s'
+              }}>
+                Browse Files
+                <input
+                  type="file"
+                  multiple
+                  onChange={handleFileSelect}
+                  style={{ display: 'none' }}
+                  accept=".pdf,.png,.jpg,.jpeg"
+                />
+              </label>
+            </div>
+
+            {/* Selected Files List */}
+            {selectedFiles.length > 0 && (
+              <div>
+                <h3 style={{ margin: '0 0 1rem 0', color: '#323130', fontSize: '16px', fontWeight: 600 }}>
+                  Selected Files ({selectedFiles.length})
+                </h3>
+                <div style={{ display: 'grid', gap: '8px', marginBottom: '1.5rem' }}>
+                  {selectedFiles.map(file => (
+                    <div key={file.id} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '12px',
+                      background: 'white',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '2px'
+                    }}>
+                      <span style={{ fontSize: '20px' }}>📄</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 500, color: '#323130', fontSize: '13px' }}>{file.file.name}</div>
+                        <div style={{ fontSize: '12px', color: '#605e5c' }}>
+                          {(file.file.size / 1024).toFixed(1)} KB
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removeSelectedFile(file.id)}
+                        style={{
+                          background: '#d13438',
+                          color: 'white',
+                          border: 'none',
+                          padding: '6px 16px',
+                          borderRadius: '2px',
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                          fontSize: '13px'
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={uploadAndScanFiles}
+                  disabled={isUploading}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    background: isUploading ? '#a19f9d' : '#107c10',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '2px',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    cursor: isUploading ? 'not-allowed' : 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+                >
+                  {isUploading ? '⏳ Uploading...' : `🚀 Upload ${selectedFiles.length} File(s)`}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* My Documents (Workspace) Tab */}
         {activeTab === 'workspace' && (
           <div style={{ 
             background: 'white', 
@@ -691,30 +837,6 @@ function App() {
                       <option value="de">German</option>
                       <option value="fr">French</option>
                       <option value="es">Spanish</option>
-                    </select>
-                  </div>
-                )}
-
-                {/* Output Format Selection */}
-                {(processingMode.includes('ocr') || processingMode.includes('translate')) && (
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, color: '#323130', fontSize: '13px' }}>
-                      Output Format:
-                    </label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      style={{
-                        width: '100%',
-                        padding: '8px',
-                        borderRadius: '2px',
-                        border: '1px solid #8a8886',
-                        fontSize: '13px',
-                        fontFamily: 'inherit'
-                      }}
-                    >
-                      <option value="json">JSON (with metadata)</option>
-                      <option value="txt">Text Only</option>
                     </select>
                   </div>
                 )}
@@ -1025,10 +1147,18 @@ function App() {
                 console.log('[RESULT_CLICK] Mode:', result.mode, 'Markdown:', !!result.markdown)
                 if (result.error) {
                   showMessage('Processing Error', result.error, 'error')
+                } else if (result.mode === 'document-translate' && result.translatedDocumentUrl) {
+                  // For document translation, open the translated PDF in a new tab
+                  console.log('[RESULT_CLICK] Opening translated PDF')
+                  window.open(`${API_BASE_URL}${result.translatedDocumentUrl}`, '_blank')
                 } else if (result.mode === 'ocr-cu') {
-                  // For Content Understanding, show enhanced viewer (even if markdown is missing)
+                  // For Content Understanding, show enhanced viewer
                   console.log('[RESULT_CLICK] Opening CU viewer')
                   showContentUnderstandingResult(result, result.documentId, result.userId)
+                } else if (result.mode === 'ocr-di') {
+                  // For Document Intelligence, show enhanced viewer
+                  console.log('[RESULT_CLICK] Opening DI viewer')
+                  showDocumentIntelligenceResult(result, result.documentId, result.userId)
                 } else if (result.ocrText) {
                   showMessage('Extracted Text', result.ocrText.substring(0, 500) + (result.ocrText.length > 500 ? '...' : ''), 'info')
                 } else if (result.translatedText) {
@@ -1172,6 +1302,180 @@ function App() {
       }}
       onCancel={() => setConfirmModal({ ...confirmModal, isOpen: false })}
     />
+
+    {/* PDF Preview Modal */}
+    {pdfPreview.isOpen && pdfPreview.jobId && pdfPreview.blobUrl && (
+      <div 
+        onClick={() => {
+          URL.revokeObjectURL(pdfPreview.blobUrl!)
+          setPdfPreview({ isOpen: false, jobId: null, filename: null, blobUrl: null })
+        }}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }}
+      >
+        <div 
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: 'white',
+            borderRadius: '12px',
+            width: '90%',
+            maxWidth: '1200px',
+            height: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)'
+          }}
+        >
+          {/* Header */}
+          <div style={{
+            padding: '20px 24px',
+            borderBottom: '1px solid #e5e7eb',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '600', color: '#111827' }}>
+                📄 Translated PDF Preview
+              </h2>
+              <p style={{ margin: '4px 0 0 0', fontSize: '14px', color: '#6b7280' }}>
+                {pdfPreview.filename}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                URL.revokeObjectURL(pdfPreview.blobUrl!)
+                setPdfPreview({ isOpen: false, jobId: null, filename: null, blobUrl: null })
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                fontSize: '28px',
+                cursor: 'pointer',
+                color: '#6b7280',
+                padding: '0',
+                width: '32px',
+                height: '32px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '6px',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#f3f4f6'
+                e.currentTarget.style.color = '#111827'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'none'
+                e.currentTarget.style.color = '#6b7280'
+              }}
+            >
+              ×
+            </button>
+          </div>
+          
+          {/* PDF Viewer */}
+          <div style={{ flex: 1, padding: '20px', overflow: 'hidden' }}>
+            <object
+              data={pdfPreview.blobUrl}
+              type="application/pdf"
+              style={{
+                width: '100%',
+                height: '100%',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px'
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: '#6b7280'
+              }}>
+                <p style={{ fontSize: '16px', marginBottom: '12px' }}>
+                  ⚠️ Your browser doesn't support PDF preview
+                </p>
+                <a
+                  href={pdfPreview.blobUrl}
+                  download={pdfPreview.filename}
+                  style={{
+                    padding: '10px 20px',
+                    background: '#3b82f6',
+                    color: 'white',
+                    textDecoration: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '500'
+                  }}
+                >
+                  📥 Download PDF
+                </a>
+              </div>
+            </object>
+          </div>
+          
+          {/* Footer with Download Button */}
+          <div style={{
+            padding: '16px 24px',
+            borderTop: '1px solid #e5e7eb',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '12px'
+          }}>
+            <a
+              href={pdfPreview.blobUrl}
+              download={pdfPreview.filename}
+              style={{
+                padding: '10px 20px',
+                background: '#3b82f6',
+                color: 'white',
+                textDecoration: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              📥 Download PDF
+            </a>
+            <button
+              onClick={() => {
+                URL.revokeObjectURL(pdfPreview.blobUrl!)
+                setPdfPreview({ isOpen: false, jobId: null, filename: null, blobUrl: null })
+              }}
+              style={{
+                padding: '10px 20px',
+                background: '#f3f4f6',
+                color: '#374151',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer'
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* Content Understanding Viewer Modal */}
     {cuViewerModal.isOpen && cuViewerModal.result && (
@@ -1329,9 +1633,242 @@ function App() {
 
             {cuViewerModal.viewMode === 'bounding-boxes' && (
               <BoundingBoxViewer
-                pages={cuViewerModal.result.pages || []}
+                pages={cuViewerModal.result.pages as any || []}
                 documentId={cuViewerModal.documentId}
                 userId={cuViewerModal.userId}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Document Intelligence Viewer Modal */}
+    {diViewerModal.isOpen && diViewerModal.result && (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000
+      }}>
+        <div style={{
+          background: 'white',
+          borderRadius: '2px',
+          width: '95%',
+          maxWidth: '1200px',
+          height: '90%',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          boxShadow: '0 8px 16px rgba(0,0,0,0.3)'
+        }}>
+          {/* Header */}
+          <div style={{
+            padding: '16px 24px',
+            borderBottom: '1px solid #e0e0e0',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            background: '#f3f2f1'
+          }}>
+            <h3 style={{ margin: 0, color: '#323130', fontSize: '16px', fontWeight: 600 }}>
+              Document Intelligence: {diViewerModal.result.originalFilename}
+            </h3>
+            <button
+              onClick={() => setDiViewerModal({ ...diViewerModal, isOpen: false })}
+              style={{
+                background: '#d13438',
+                color: 'white',
+                border: 'none',
+                borderRadius: '2px',
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 500
+              }}
+            >
+              Close
+            </button>
+          </div>
+
+          {/* View Mode Tabs */}
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            padding: '12px 24px',
+            borderBottom: '1px solid #e0e0e0',
+            background: '#faf9f8'
+          }}>
+            <button
+              onClick={() => setDiViewerModal({ ...diViewerModal, viewMode: 'text' })}
+              style={{
+                padding: '8px 16px',
+                background: diViewerModal.viewMode === 'text' ? '#0078d4' : 'transparent',
+                color: diViewerModal.viewMode === 'text' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              📄 Text
+            </button>
+            <button
+              onClick={() => setDiViewerModal({ ...diViewerModal, viewMode: 'pages' })}
+              style={{
+                padding: '8px 16px',
+                background: diViewerModal.viewMode === 'pages' ? '#0078d4' : 'transparent',
+                color: diViewerModal.viewMode === 'pages' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              📑 Pages
+            </button>
+            <button
+              onClick={() => setDiViewerModal({ ...diViewerModal, viewMode: 'bounding-boxes' })}
+              style={{
+                padding: '8px 16px',
+                background: diViewerModal.viewMode === 'bounding-boxes' ? '#0078d4' : 'transparent',
+                color: diViewerModal.viewMode === 'bounding-boxes' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              🔲 Bounding Boxes
+            </button>
+            <button
+              onClick={() => setDiViewerModal({ ...diViewerModal, viewMode: 'json' })}
+              style={{
+                padding: '8px 16px',
+                background: diViewerModal.viewMode === 'json' ? '#0078d4' : 'transparent',
+                color: diViewerModal.viewMode === 'json' ? 'white' : '#323130',
+                border: '1px solid #e0e0e0',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 500
+              }}
+            >
+              {} JSON
+            </button>
+          </div>
+
+          {/* Content */}
+          <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
+            {diViewerModal.viewMode === 'text' && (
+              <div>
+                <div style={{
+                  background: '#f3f2f1',
+                  padding: '16px',
+                  borderRadius: '2px',
+                  marginBottom: '16px'
+                }}>
+                  <div style={{ fontSize: '13px', color: '#605e5c', marginBottom: '8px' }}>
+                    <strong>Service:</strong> {diViewerModal.result.service}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#605e5c', marginBottom: '8px' }}>
+                    <strong>Model:</strong> {diViewerModal.result.model || 'prebuilt-read'}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#605e5c' }}>
+                    <strong>Pages:</strong> {diViewerModal.result.pageCount}
+                  </div>
+                </div>
+                <pre style={{
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'Consolas, "Courier New", monospace',
+                  fontSize: '13px',
+                  lineHeight: '1.6',
+                  color: '#323130',
+                  background: 'white',
+                  border: '1px solid #e0e0e0',
+                  padding: '16px',
+                  borderRadius: '2px',
+                  margin: 0
+                }}>
+                  {diViewerModal.result.text || 'No text content available'}
+                </pre>
+              </div>
+            )}
+
+            {diViewerModal.viewMode === 'pages' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                {(diViewerModal.result.pages || []).map((page: any, idx: number) => (
+                  <div key={idx} style={{
+                    background: 'white',
+                    border: '1px solid #e0e0e0',
+                    borderRadius: '2px',
+                    padding: '16px'
+                  }}>
+                    <h4 style={{
+                      margin: '0 0 12px 0',
+                      color: '#0078d4',
+                      fontSize: '14px',
+                      fontWeight: 600
+                    }}>
+                      Page {page.pageNumber} ({page.lines?.length || 0} lines, {page.words?.length || 0} words)
+                    </h4>
+                    <div style={{ fontSize: '12px', color: '#605e5c', marginBottom: '12px' }}>
+                      Size: {page.width} × {page.height} {page.unit} | Angle: {page.angle}°
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {(page.lines || []).map((line: any, lineIdx: number) => (
+                        <div key={lineIdx} style={{
+                          padding: '8px',
+                          background: '#faf9f8',
+                          borderLeft: '3px solid #0078d4',
+                          borderRadius: '2px',
+                          fontSize: '13px',
+                          fontFamily: 'Consolas, "Courier New", monospace'
+                        }}>
+                          {line.content}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {(!diViewerModal.result.pages || diViewerModal.result.pages.length === 0) && (
+                  <div style={{ textAlign: 'center', color: '#605e5c', padding: '40px' }}>
+                    No page data available
+                  </div>
+                )}
+              </div>
+            )}
+
+            {diViewerModal.viewMode === 'json' && (
+              <pre style={{
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'Consolas, "Courier New", monospace',
+                fontSize: '12px',
+                lineHeight: '1.5',
+                color: '#323130',
+                background: '#f3f2f1',
+                padding: '16px',
+                borderRadius: '2px',
+                margin: 0
+              }}>
+                {JSON.stringify(diViewerModal.result.fullResult || diViewerModal.result, null, 2)}
+              </pre>
+            )}
+
+            {diViewerModal.viewMode === 'bounding-boxes' && (
+              <BoundingBoxViewer
+                pages={diViewerModal.result.pages as any || []}
+                documentId={diViewerModal.documentId}
+                userId={diViewerModal.userId}
               />
             )}
           </div>
