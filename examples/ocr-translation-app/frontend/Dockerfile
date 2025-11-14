@@ -4,13 +4,17 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY frontend/package*.json ./
 
 # Install dependencies
 RUN npm ci
 
 # Copy source code
-COPY . .
+COPY frontend/src ./src
+COPY frontend/index.html ./
+COPY frontend/tsconfig.json ./
+COPY frontend/tsconfig.node.json ./
+COPY frontend/vite.config.ts ./
 
 # Build the app
 RUN npm run build
@@ -22,7 +26,7 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copy nginx config template
-COPY default.conf.template /etc/nginx/templates/default.conf.template
+COPY frontend/default.conf.template /etc/nginx/templates/default.conf.template
 
 # Nginx will automatically substitute $BACKEND_URL from environment variable
 # when using the /etc/nginx/templates/ directory

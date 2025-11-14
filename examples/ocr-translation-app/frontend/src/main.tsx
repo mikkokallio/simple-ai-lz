@@ -4,6 +4,7 @@ import './index.css'
 import { DocumentTable } from './components/DocumentTable'
 import { MessageModal } from './components/MessageModal'
 import { ConfirmModal } from './components/ConfirmModal'
+import { BoundingBoxViewer } from './components/BoundingBoxViewer'
 
 // Runtime configuration
 declare global {
@@ -119,7 +120,9 @@ function App() {
     isOpen: boolean
     result: ProcessedResult | null
     viewMode: 'markdown' | 'json' | 'bounding-boxes'
-  }>({ isOpen: false, result: null, viewMode: 'markdown' })
+    documentId: string | null
+    userId: string | null
+  }>({ isOpen: false, result: null, viewMode: 'markdown', documentId: null, userId: null })
   
   // UI state
   const [isDragging, setIsDragging] = useState(false)
@@ -139,8 +142,8 @@ function App() {
     setConfirmModal({ isOpen: true, title, message, onConfirm })
   }
 
-  const showContentUnderstandingResult = (result: ProcessedResult) => {
-    setCuViewerModal({ isOpen: true, result, viewMode: 'markdown' })
+  const showContentUnderstandingResult = (result: ProcessedResult, documentId: string, userId: string) => {
+    setCuViewerModal({ isOpen: true, result, viewMode: 'markdown', documentId, userId })
   }
 
   useEffect(() => {
@@ -1025,7 +1028,7 @@ function App() {
                 } else if (result.mode === 'ocr-cu') {
                   // For Content Understanding, show enhanced viewer (even if markdown is missing)
                   console.log('[RESULT_CLICK] Opening CU viewer')
-                  showContentUnderstandingResult(result)
+                  showContentUnderstandingResult(result, result.documentId, result.userId)
                 } else if (result.ocrText) {
                   showMessage('Extracted Text', result.ocrText.substring(0, 500) + (result.ocrText.length > 500 ? '...' : ''), 'info')
                 } else if (result.translatedText) {
@@ -1110,6 +1113,26 @@ function App() {
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 title={previewDocument.originalFilename}
               />
+            ) : previewDocument.mimeType?.startsWith('image/') ? (
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                height: '100%',
+                padding: '20px'
+              }}>
+                <img
+                  src={`${API_BASE_URL}/api/workspace/${previewDocument.userId}/${previewDocument.documentId}/original/${encodeURIComponent(previewDocument.originalFilename)}`}
+                  alt={previewDocument.originalFilename}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    border: '1px solid #e0e0e0',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  }}
+                />
+              </div>
             ) : (
               <div style={{ 
                 display: 'flex', 
@@ -1305,49 +1328,11 @@ function App() {
             )}
 
             {cuViewerModal.viewMode === 'bounding-boxes' && (
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '12px'
-              }}>
-                {cuViewerModal.result.pages && cuViewerModal.result.pages.length > 0 ? (
-                  cuViewerModal.result.pages.map((page, pageIdx) => (
-                    <div key={pageIdx} style={{
-                      border: '1px solid #e0e0e0',
-                      borderRadius: '2px',
-                      padding: '16px',
-                      background: '#faf9f8'
-                    }}>
-                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600 }}>
-                        Page {pageIdx + 1}
-                      </h4>
-                      {page.lines && page.lines.map((line, lineIdx) => (
-                        <div key={lineIdx} style={{
-                          marginBottom: '8px',
-                          padding: '8px',
-                          background: 'white',
-                          borderLeft: '3px solid #0078d4',
-                          fontSize: '13px'
-                        }}>
-                          <div style={{ fontWeight: 500, marginBottom: '4px', color: '#0078d4' }}>
-                            Line {lineIdx + 1}
-                          </div>
-                          <div style={{ marginBottom: '4px', color: '#323130' }}>
-                            {line.content}
-                          </div>
-                          <div style={{ fontSize: '11px', color: '#605e5c', fontFamily: 'Consolas, monospace' }}>
-                            {line.source}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ))
-                ) : (
-                  <div style={{ color: '#605e5c', fontSize: '13px' }}>
-                    No bounding box data available
-                  </div>
-                )}
-              </div>
+              <BoundingBoxViewer
+                pages={cuViewerModal.result.pages || []}
+                documentId={cuViewerModal.documentId}
+                userId={cuViewerModal.userId}
+              />
             )}
           </div>
         </div>
