@@ -1,0 +1,15 @@
+# Use the official Azure Functions Node.js base image
+FROM mcr.microsoft.com/azure-functions/node:4-node20
+
+# Set working directory to where Azure Functions expects the code
+WORKDIR /home/site/wwwroot
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy host.json and app.js to the root
+COPY host.json ./
+COPY app.js ./

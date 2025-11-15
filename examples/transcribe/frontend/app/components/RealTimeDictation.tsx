@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
+import { getApiBaseUrl } from '../lib/apiConfig';
 
 interface Props {
   onDocumentCreated: (doc: any) => void;
@@ -22,7 +23,7 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
       setError(null);
       
       // Get Speech token from backend
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:7071';
+      const apiBase = getApiBaseUrl();
       const tokenResponse = await fetch(`${apiBase}/api/getSpeechToken`);
       if (!tokenResponse.ok) {
         throw new Error('Failed to get speech token');
@@ -90,9 +91,9 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
     setError(null);
 
     try {
-      const functionAppUrl = process.env.NEXT_PUBLIC_FUNCTION_APP_URL;
+      const apiBase = getApiBaseUrl();
       
-      const response = await fetch(`${functionAppUrl}/api/processTranscript`, {
+      const response = await fetch(`${apiBase}/api/processTranscript`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,0 +1,22 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy application code
+COPY server.js ./
+
+# Expose port
+EXPOSE 80
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT=80
+
+# Start the server
+CMD ["node", "server.js"]

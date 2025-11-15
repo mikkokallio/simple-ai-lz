@@ -9,6 +9,9 @@ COPY package.json package-lock.json* ./
 # Install dependencies (including devDependencies for Azure Functions)
 RUN npm ci
 
+# Install Azure Functions Core Tools globally
+RUN npm install -g azure-functions-core-tools@4 --unsafe-perm true
+
 # Copy source code
 COPY . .
 
@@ -16,5 +19,6 @@ COPY . .
 EXPOSE 80
 
 ENV AzureWebJobsScriptRoot=/app
+ENV FUNCTIONS_WORKER_RUNTIME=node
 
-CMD ["node_modules/.bin/func", "start", "--port", "80"]
+CMD ["func", "start", "--port", "80", "--host", "0.0.0.0"]

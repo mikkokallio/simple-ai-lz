@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { getApiBaseUrl } from '../lib/apiConfig';
 
 interface Props {
   document: any;
@@ -19,9 +20,9 @@ export default function DocumentViewer({ document, onReset }: Props) {
     setError(null);
 
     try {
-      const functionAppUrl = process.env.NEXT_PUBLIC_FUNCTION_APP_URL;
+      const apiBase = getApiBaseUrl();
       
-      const response = await fetch(`${functionAppUrl}/api/finalizeDocument`, {
+      const response = await fetch(`${apiBase}/api/finalizeDocument`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
