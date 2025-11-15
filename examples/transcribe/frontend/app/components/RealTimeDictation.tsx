@@ -14,21 +14,29 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false); // New state for initialization
   const [error, setError] = useState<string | null>(null);
   
   const recognizerRef = useRef<SpeechSDK.SpeechRecognizer | null>(null);
+  const lastOffsetRef = useRef<number>(0); // Track last processed offset to prevent duplicates
 
   const startRecording = async () => {
     try {
       setError(null);
+      setIsInitializing(true); // Show loading state
+      console.log('[Recording] Starting recording...');
+      const startTime = performance.now();
       
       // Get Speech token from backend
       const apiBase = getApiBaseUrl();
+      console.log('[Recording] Fetching speech token from:', `${apiBase}/api/getSpeechToken`);
+      
       const tokenResponse = await fetch(`${apiBase}/api/getSpeechToken`);
       if (!tokenResponse.ok) {
         throw new Error('Failed to get speech token');
       }
       const { token, region } = await tokenResponse.json();
+      console.log('[Recording] Token received, region:', region, 'time:', Math.round(performance.now() - startTime), 'ms');
       
       const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(token, region);
       speechConfig.speechRecognitionLanguage = 'fi-FI';
@@ -37,32 +45,51 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
       const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
 
       recognizerRef.current = recognizer;
+      lastOffsetRef.current = 0; // Reset offset tracking
 
       recognizer.recognizing = (s, e) => {
         if (e.result.reason === SpeechSDK.ResultReason.RecognizingSpeech) {
+          console.log('[Recording] Recognizing (interim):', e.result.text);
           setInterimTranscript(e.result.text);
         }
       };
 
       recognizer.recognized = (s, e) => {
         if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
-          setTranscript(prev => prev + ' ' + e.result.text);
-          setInterimTranscript('');
+          const currentOffset = e.offset;
+          
+          // Only process if this is a new recognition (offset has advanced)
+          if (currentOffset > lastOffsetRef.current) {
+            console.log('[Recording] Recognized (final):', e.result.text, 'offset:', currentOffset);
+            lastOffsetRef.current = currentOffset;
+            
+            setTranscript(prev => {
+              const newText = prev ? prev + ' ' + e.result.text : e.result.text;
+              return newText;
+            });
+            setInterimTranscript('');
+          } else {
+            console.log('[Recording] Skipping duplicate recognition at offset:', currentOffset);
+          }
         }
       };
 
       recognizer.startContinuousRecognitionAsync(
         () => {
+          console.log('[Recording] Recognition started successfully, time:', Math.round(performance.now() - startTime), 'ms');
           setIsRecording(true);
+          setIsInitializing(false); // Hide loading state
         },
         (err) => {
           setError(`Virhe aloitettaessa nauhoitusta: ${err}`);
-          console.error(err);
+          console.error('[Recording] Error starting recognition:', err);
+          setIsInitializing(false); // Hide loading state on error
         }
       );
     } catch (err: any) {
       setError(`Virhe: ${err.message}`);
-      console.error(err);
+      console.error('[Recording] Exception:', err);
+      setIsInitializing(false); // Hide loading state on error
     }
   };
 
@@ -140,13 +167,25 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
             {!isRecording ? (
               <button
                 onClick={startRecording}
-                disabled={isProcessing}
-                className="btn-primary flex items-center"
+                disabled={isProcessing || isInitializing}
+                className="btn-primary flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-                </svg>
-                Aloita nauhoitus
+                {isInitializing ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Valmistellaan...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                    </svg>
+                    Aloita nauhoitus
+                  </>
+                )}
               </button>
             ) : (
               <button

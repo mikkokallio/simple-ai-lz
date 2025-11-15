@@ -63,36 +63,50 @@ app.get('/health', (req, res) => {
 
 // Get Speech Service token
 app.get('/api/getSpeechToken', (req, res) => {
+  const startTime = Date.now();
+  console.log('[getSpeechToken] Request received');
+  
   try {
     const speechKey = process.env.AZURE_SPEECH_KEY;
     const speechRegion = 'swedencentral';
     
     if (!speechKey) {
+      console.error('[getSpeechToken] Speech service not configured');
       return res.status(500).json({ error: 'Speech service not configured' });
     }
 
+    const duration = Date.now() - startTime;
+    console.log(`[getSpeechToken] Returning token, duration: ${duration}ms`);
+    
     res.json({
       token: speechKey, // In production, exchange for a time-limited token
       region: speechRegion
     });
   } catch (error) {
-    console.error('Error getting speech token:', error);
+    console.error('[getSpeechToken] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Process transcript with OpenAI
 app.post('/api/processTranscript', async (req, res) => {
+  const startTime = Date.now();
+  console.log('[processTranscript] Request received');
+  
   try {
     const { transcript, language } = req.body;
 
     if (!transcript) {
+      console.error('[processTranscript] No transcript provided');
       return res.status(400).json({ error: 'Transcript required' });
     }
 
     if (!openAIClient) {
+      console.error('[processTranscript] OpenAI not configured');
       return res.status(500).json({ error: 'OpenAI not configured' });
     }
+
+    console.log(`[processTranscript] Processing transcript of length: ${transcript.length}`);
 
     const systemPrompt = `Olet lääkärin avustaja. Analysoi seuraava suomenkielinen transkriptio lääkärin ja potilaan välisestä keskustelusta.
 
@@ -109,6 +123,7 @@ Vastaa JSON-muodossa:
   "custodian_display": "Hoitoyksikkö jos mainittu"
 }`;
 
+    const openAIStart = Date.now();
     const response = await openAIClient.chat.completions.create({
       model: openAIDeployment,
       messages: [
@@ -118,12 +133,15 @@ Vastaa JSON-muodossa:
       temperature: 0.3,
       max_tokens: 2000
     });
+    console.log(`[processTranscript] OpenAI response received, duration: ${Date.now() - openAIStart}ms`);
 
     const structuredNote = JSON.parse(response.choices[0].message.content);
     const documentId = `draft-${Date.now()}`;
     
     // Save to Cosmos DB if available
     if (container) {
+      const cosmosStart = Date.now();
+      console.log('[processTranscript] Saving to Cosmos DB...');
       const now = new Date().toISOString();
       const document = {
         id: documentId,
@@ -155,7 +173,11 @@ Vastaa JSON-muodossa:
       };
 
       await container.items.create(document);
+      console.log(`[processTranscript] Saved to Cosmos DB, duration: ${Date.now() - cosmosStart}ms`);
     }
+
+    const totalDuration = Date.now() - startTime;
+    console.log(`[processTranscript] Total duration: ${totalDuration}ms`);
 
     res.json({
       documentId,
@@ -163,7 +185,7 @@ Vastaa JSON-muodossa:
       rawTranscript: transcript
     });
   } catch (error) {
-    console.error('Error processing transcript:', error);
+    console.error('[processTranscript] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
