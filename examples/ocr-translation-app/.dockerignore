@@ -1,0 +1,53 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docs and examples
+*.md
+docs/
+examples/
+test/
+tests/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+
+# Temp files
+tmp/
+temp/
+*.tmp
+*.log
