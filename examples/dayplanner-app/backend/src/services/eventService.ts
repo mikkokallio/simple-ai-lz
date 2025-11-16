@@ -79,27 +79,11 @@ export class EventService {
     // Mock implementation - replace with actual API integration
     // API key would be in environment: process.env.TAPAHTUMAINFO_API_KEY
     
-    console.log('Tapahtumainfo search not fully implemented - returning mock data');
+    console.log('Tapahtumainfo search not fully implemented - returning empty array');
     
-    // Return mock events for demonstration
-    return [
-      {
-        id: 'mock-event-1',
-        name: 'Summer Music Festival',
-        description: 'Open-air music festival with local bands',
-        category: 'music',
-        startDate: new Date(request.date),
-        endDate: new Date(request.date),
-        location: {
-          lat: request.lat + 0.01,
-          lon: request.lon + 0.01,
-          address: 'Festival Grounds',
-        },
-        organizer: 'City Culture Department',
-        isFree: true,
-        source: 'tapahtumainfo',
-      },
-    ];
+    // Return empty array until real API is implemented
+    // This prevents fake events from appearing in itineraries
+    return [];
   }
 
   /**
@@ -109,28 +93,11 @@ export class EventService {
     // Mock implementation - replace with actual API integration
     // API key would be in environment: process.env.EVENTBRITE_API_KEY
     
-    console.log('Eventbrite search not fully implemented - returning mock data');
+    console.log('Eventbrite search not fully implemented - returning empty array');
     
-    return [
-      {
-        id: 'mock-event-2',
-        name: 'Food Truck Festival',
-        description: 'International street food with live entertainment',
-        category: 'food',
-        startDate: new Date(request.date),
-        endDate: new Date(request.date),
-        location: {
-          lat: request.lat + 0.02,
-          lon: request.lon - 0.01,
-          address: 'Central Park',
-        },
-        organizer: 'Food Festival Org',
-        ticketPrice: '€15',
-        isFree: false,
-        ticketUrl: 'https://example.com/tickets',
-        source: 'eventbrite',
-      },
-    ];
+    // Return empty array until real API is implemented
+    // This prevents fake events from appearing in itineraries
+    return [];
   }
 
   /**

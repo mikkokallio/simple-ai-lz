@@ -62,6 +62,17 @@ export class ItineraryService {
   }
 
   /**
+   * Get season based on date (for Northern Hemisphere)
+   */
+  private getSeason(date: Date): string {
+    const month = date.getMonth(); // 0-11
+    if (month >= 2 && month <= 4) return 'Spring';
+    if (month >= 5 && month <= 7) return 'Summer';
+    if (month >= 8 && month <= 10) return 'Autumn';
+    return 'Winter';
+  }
+
+  /**
    * Generate new itinerary from user input
    */
   async generateItinerary(request: GenerateItineraryRequest): Promise<Itinerary> {
@@ -101,34 +112,40 @@ export class ItineraryService {
     dayContext: any,
     weather: any
   ): Promise<Itinerary> {
-    const systemPrompt = `You are Funday, an expert AI activity planner. Create personalized day itineraries based on user preferences, weather, day context, and local events.
+    const month = request.date.toLocaleString('en-US', { month: 'long' });
+    const season = this.getSeason(request.date);
+    
+    const systemPrompt = `You are Funday, an expert AI activity planner. Create personalized day itineraries that STRICTLY match user preferences and current conditions.
 
-Current context:
+CRITICAL CONTEXT:
 - Location: ${request.location.address}
 - Date: ${request.date.toDateString()} (${dayContext.dayOfWeek})
-- Weather: ${weather.condition}, ${weather.temperature}°C
-- Day notes: ${dayContext.specialConsiderations.join('; ')}
+- Month: ${month} (${season})
+- Current Weather: ${weather.condition}, ${weather.temperature}°C
+- Day constraints: ${dayContext.specialConsiderations.join('; ')}
 - Is weekend: ${dayContext.isWeekend}
 - Is holiday: ${dayContext.isHoliday}
 
-When creating itineraries:
-1. Consider weather for outdoor activities
-2. Account for day-specific constraints (Sunday closures, holiday hours)
-3. Look for relevant local events
-4. Optimize route to minimize travel time
-5. Balance activity types
-6. Suggest specific venues with details
-7. Alert about special considerations proactively
+MANDATORY RULES:
+1. SEASON APPROPRIATENESS: It's ${month} (${season}) - ABSOLUTELY NO outdoor festivals, concerts, or summer events. NO beach, swimming, or water activities if temperature is below 15°C.
+2. USER INTENT MATCHING: ONLY suggest activities DIRECTLY matching user's request. If user says "nature and coffee": suggest hiking trails, parks, forests, nature reserves, and cafes/coffee shops. DO NOT add festivals, concerts, shopping, or unrelated activities.
+3. TEMPERATURE AWARENESS: ${weather.temperature}°C - If below 10°C, focus on indoor venues, museums, cafes, covered markets. Outdoor activities only if explicitly requested and weather-appropriate.
+4. DAY CONSTRAINTS: ${dayContext.dayOfWeek} - Respect opening hours and day-specific closures
+5. NO FAKE EVENTS: Do NOT invent events like "Summer Music Festival" or "Christmas Market" unless you can verify they actually exist and are happening on this date
+6. REALISTIC VENUES: Only suggest real, permanent establishments (cafes, museums, parks) - NOT seasonal/temporary events
+7. ROUTE OPTIMIZATION: Minimize travel distance within ${request.radius}km radius
 
-Return a structured itinerary with 4-7 activities.`;
+CRITICAL: User wants "${request.userInput}" - stick EXACTLY to this theme. No creative additions.
 
-    const userMessage = `User request: "${request.userInput}"
+Return a structured itinerary with 3-5 activities that directly match the user's request and current conditions.`;
+
+    const userMessage = `Create a day plan for: "${request.userInput}"
 
 Location: ${request.location.lat}, ${request.location.lon}
-Radius: ${request.radius} km
-Transport modes: ${request.preferences.transportModes?.join(', ') || 'any'}
+Search radius: ${request.radius} km
+Transport: ${request.preferences.transportModes?.join(', ') || 'walking'}
 
-Please create a fun day itinerary!`;
+Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest seasonally appropriate activities that match my interests!`;
 
     try {
       const response = await this.openaiClient.chat.completions.create({
@@ -139,8 +156,7 @@ Please create a fun day itinerary!`;
         ],
         functions: this.getFunctionDefinitions(request),
         function_call: 'auto',
-        temperature: 0.7,
-        max_tokens: 2000,
+        max_completion_tokens: 2000,
       });
 
       // Handle function calls

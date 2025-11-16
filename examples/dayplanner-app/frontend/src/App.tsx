@@ -72,13 +72,13 @@ function App() {
         </div>
 
         <div className="right-panel">
-          <InputPanel
-            onGenerate={handleGenerate}
-            loading={loading}
-            error={error}
-          />
-
-          {itinerary && (
+          {!itinerary ? (
+            <InputPanel
+              onGenerate={handleGenerate}
+              loading={loading}
+              error={error}
+            />
+          ) : (
             <ItineraryView
               itinerary={itinerary}
               onClose={() => setItinerary(null)}

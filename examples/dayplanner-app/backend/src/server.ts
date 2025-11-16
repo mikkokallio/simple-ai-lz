@@ -77,6 +77,7 @@ async function initializeServices() {
       defaultQuery: { 'api-version': '2024-08-01-preview' },
       defaultHeaders: { 'api-key': AZURE_OPENAI_KEY },
     });
+    console.log('OpenAI client initialized with API key');
   } else {
     console.warn('AZURE_OPENAI_KEY not set');
   }

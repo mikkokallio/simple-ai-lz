@@ -12,5 +12,5 @@ EOF
 
 echo "Configured backend URL: ${BACKEND_URL}"
 
-# Start nginx
-exec nginx -g 'daemon off;'
+# Don't start nginx here - the nginx entrypoint will do that
+exit 0
