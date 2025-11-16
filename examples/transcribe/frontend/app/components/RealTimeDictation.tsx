@@ -52,7 +52,8 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
       const { token, region } = await tokenResponse.json();
       console.log('[Recording] Token received, region:', region, 'time:', Math.round(performance.now() - startTime), 'ms');
       
-      const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(token, region);
+      // Use fromAuthorizationToken for token-based authentication (not fromSubscription)
+      const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
       const speechLanguage = languageMap[language];
       speechConfig.speechRecognitionLanguage = speechLanguage;
       console.log('[Recording] Using speech recognition language:', speechLanguage);

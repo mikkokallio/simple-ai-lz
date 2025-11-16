@@ -76,10 +76,10 @@ app.get('/api/getSpeechToken', async (req, res) => {
     }
 
     // Exchange API key for a time-limited token (10 minutes)
-    const tokenResponse = await axios.post(
+    const tokenResponse = await fetch(
       `https://${speechRegion}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,
-      null,
       {
+        method: 'POST',
         headers: {
           'Ocp-Apim-Subscription-Key': speechKey,
           'Content-Type': 'application/x-www-form-urlencoded'
@@ -87,11 +87,17 @@ app.get('/api/getSpeechToken', async (req, res) => {
       }
     );
 
+    if (!tokenResponse.ok) {
+      throw new Error(`Token exchange failed: ${tokenResponse.status} ${tokenResponse.statusText}`);
+    }
+
+    const token = await tokenResponse.text(); // Token is returned as plain text
+
     const duration = Date.now() - startTime;
     console.log(`[getSpeechToken] Token issued, duration: ${duration}ms`);
     
     res.json({
-      token: tokenResponse.data, // Time-limited token, not the API key
+      token: token, // Time-limited token, not the API key
       region: speechRegion
     });
   } catch (error) {
