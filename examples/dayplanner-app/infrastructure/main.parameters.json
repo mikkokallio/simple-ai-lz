@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "swedencentral"
+    },
+    "containerAppsEnvironmentId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/rg-ailz-lab/providers/Microsoft.App/managedEnvironments/<environment-name>"
+    },
+    "appInsightsConnectionString": {
+      "value": "<app-insights-connection-string>"
+    },
+    "acrLoginServer": {
+      "value": "<acr-name>.azurecr.io"
+    },
+    "acrPassword": {
+      "value": ""
+    },
+    "frontendImage": {
+      "value": "<acr-name>.azurecr.io/dayplanner-frontend:latest"
+    },
+    "backendImage": {
+      "value": "<acr-name>.azurecr.io/dayplanner-backend:latest"
+    },
+    "openAiEndpoint": {
+      "value": "https://<openai-resource>.openai.azure.com/"
+    },
+    "openAiDeployment": {
+      "value": "gpt-4o"
+    },
+    "storageAccountName": {
+      "value": "stdayplanner<uniquesuffix>"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dayplanner-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - COSMOS_ENDPOINT=${COSMOS_ENDPOINT}
+      - COSMOS_KEY=${COSMOS_KEY}
+      - COSMOS_DATABASE=dayplanner-db
+      - COSMOS_CONTAINER=itineraries
+      - STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME}
+      - STORAGE_ACCOUNT_KEY=${STORAGE_ACCOUNT_KEY}
+      - STORAGE_CONTAINER=dayplanner-data
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/package.json:/app/package.json
+    command: npm run dev
+    networks:
+      - dayplanner-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dayplanner-frontend
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:3000
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+    depends_on:
+      - backend
+    networks:
+      - dayplanner-network
+
+networks:
+  dayplanner-network:
+    driver: bridge
