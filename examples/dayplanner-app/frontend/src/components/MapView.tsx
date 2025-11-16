@@ -18,6 +18,7 @@ interface MapViewProps {
   location: Location | null;
   onLocationSelect: (location: Location) => void;
   itinerary: Itinerary | null;
+  radius: number;
 }
 
 function LocationMarker({ onLocationSelect }: { onLocationSelect: (location: Location) => void }) {
@@ -38,7 +39,7 @@ function LocationMarker({ onLocationSelect }: { onLocationSelect: (location: Loc
   return position ? <Marker position={position}><Popup>Starting location</Popup></Marker> : null;
 }
 
-export default function MapView({ location, onLocationSelect, itinerary }: MapViewProps) {
+export default function MapView({ location, onLocationSelect, itinerary, radius }: MapViewProps) {
   const [center, setCenter] = useState<[number, number]>([60.1699, 24.9384]); // Helsinki default
 
   useEffect(() => {
@@ -71,7 +72,7 @@ export default function MapView({ location, onLocationSelect, itinerary }: MapVi
       {location && (
         <Circle
           center={[location.lat, location.lon]}
-          radius={5000}
+          radius={radius * 1000}
           pathOptions={{ color: 'blue', fillColor: 'blue', fillOpacity: 0.1 }}
         />
       )}

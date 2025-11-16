@@ -57,17 +57,70 @@ export class PlaceService {
   private buildOverpassQuery(request: SearchPlacesRequest, radiusMeters: number): string {
     const { lat, lon, type, query } = request;
 
-    // Map common types to OSM tags
+    // Comprehensive mapping of activity types to OSM tags
     const typeMapping: Record<string, string> = {
+      // Food & Drink
       restaurant: 'amenity=restaurant',
       cafe: 'amenity=cafe',
+      bar: 'amenity=bar',
+      pub: 'amenity=pub',
+      nightclub: 'amenity=nightclub',
+      fast_food: 'amenity=fast_food',
+      food_court: 'amenity=food_court',
+      ice_cream: 'amenity=ice_cream',
+      
+      // Shopping
+      shop: 'shop',
+      mall: 'shop=mall',
+      shopping: 'shop',
+      shopping_centre: 'shop=mall',
+      supermarket: 'shop=supermarket',
+      bookshop: 'shop=books',
+      clothing: 'shop=clothes',
+      
+      // Entertainment & Culture
+      cinema: 'amenity=cinema',
+      theatre: 'amenity=theatre',
       museum: 'tourism=museum',
+      gallery: 'tourism=gallery',
+      art_gallery: 'tourism=gallery',
+      library: 'amenity=library',
+      music_venue: 'amenity=music_venue',
+      casino: 'amenity=casino',
+      
+      // Nature & Outdoors
       park: 'leisure=park',
-      attraction: 'tourism=attraction',
+      garden: 'leisure=garden',
+      nature_reserve: 'leisure=nature_reserve',
       beach: 'natural=beach',
+      viewpoint: 'tourism=viewpoint',
+      picnic_site: 'tourism=picnic_site',
+      
+      // Sports & Recreation
+      sports_centre: 'leisure=sports_centre',
+      swimming_pool: 'leisure=swimming_pool',
+      fitness_centre: 'leisure=fitness_centre',
+      gym: 'leisure=fitness_centre',
+      stadium: 'leisure=stadium',
+      
+      // Tourism & Attractions
+      attraction: 'tourism=attraction',
+      monument: 'historic=monument',
+      castle: 'historic=castle',
+      church: 'amenity=place_of_worship',
+      zoo: 'tourism=zoo',
+      aquarium: 'tourism=aquarium',
+      theme_park: 'tourism=theme_park',
+      
+      // Services
+      hotel: 'tourism=hotel',
+      spa: 'leisure=spa',
+      
+      // Default fallback
+      default: 'amenity',
     };
 
-    const osmTag = type && typeMapping[type] ? typeMapping[type] : 'amenity=restaurant';
+    const osmTag = type && typeMapping[type] ? typeMapping[type] : typeMapping['default'];
 
     // Overpass QL query
     return `[out:json][timeout:25];

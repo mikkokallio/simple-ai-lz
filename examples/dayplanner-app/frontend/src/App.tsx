@@ -11,8 +11,10 @@ function App() {
   const [itinerary, setItinerary] = useState<Itinerary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [radius, setRadius] = useState(5);
 
   const handleGenerate = async (userInput: string, radius: number) => {
+    setRadius(radius);
     if (!location) {
       setError('Please select a location on the map first');
       return;
@@ -68,6 +70,7 @@ function App() {
             location={location}
             onLocationSelect={handleLocationSelect}
             itinerary={itinerary}
+            radius={radius}
           />
         </div>
 
@@ -77,6 +80,8 @@ function App() {
               onGenerate={handleGenerate}
               loading={loading}
               error={error}
+              radius={radius}
+              onRadiusChange={setRadius}
             />
           ) : (
             <ItineraryView

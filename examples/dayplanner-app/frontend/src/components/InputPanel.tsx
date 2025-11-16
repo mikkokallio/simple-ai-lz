@@ -5,11 +5,12 @@ interface InputPanelProps {
   onGenerate: (userInput: string, radius: number) => void;
   loading: boolean;
   error: string | null;
+  radius: number;
+  onRadiusChange: (radius: number) => void;
 }
 
-export default function InputPanel({ onGenerate, loading, error }: InputPanelProps) {
+export default function InputPanel({ onGenerate, loading, error, radius, onRadiusChange }: InputPanelProps) {
   const [userInput, setUserInput] = useState('');
-  const [radius, setRadius] = useState(5);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,7 +44,7 @@ export default function InputPanel({ onGenerate, loading, error }: InputPanelPro
             min="1"
             max="20"
             value={radius}
-            onChange={(e) => setRadius(Number(e.target.value))}
+            onChange={(e) => onRadiusChange(Number(e.target.value))}
             disabled={loading}
           />
         </div>

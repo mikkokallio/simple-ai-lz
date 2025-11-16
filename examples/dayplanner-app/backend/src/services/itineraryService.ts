@@ -127,17 +127,33 @@ CRITICAL CONTEXT:
 - Is holiday: ${dayContext.isHoliday}
 
 MANDATORY RULES:
-1. SEASON APPROPRIATENESS: It's ${month} (${season}) - ABSOLUTELY NO outdoor festivals, concerts, or summer events. NO beach, swimming, or water activities if temperature is below 15°C.
-2. USER INTENT MATCHING: ONLY suggest activities DIRECTLY matching user's request. If user says "nature and coffee": suggest hiking trails, parks, forests, nature reserves, and cafes/coffee shops. DO NOT add festivals, concerts, shopping, or unrelated activities.
-3. TEMPERATURE AWARENESS: ${weather.temperature}°C - If below 10°C, focus on indoor venues, museums, cafes, covered markets. Outdoor activities only if explicitly requested and weather-appropriate.
-4. DAY CONSTRAINTS: ${dayContext.dayOfWeek} - Respect opening hours and day-specific closures
-5. NO FAKE EVENTS: Do NOT invent events like "Summer Music Festival" or "Christmas Market" unless you can verify they actually exist and are happening on this date
-6. REALISTIC VENUES: Only suggest real, permanent establishments (cafes, museums, parks) - NOT seasonal/temporary events
-7. ROUTE OPTIMIZATION: Minimize travel distance within ${request.radius}km radius
+1. ACTIVITY DIVERSITY: Create a VARIED itinerary matching the user's theme. For "urban day with shopping, cinema, nightclubbing" → search for shops/malls, cinemas, bars/nightclubs. For "nature and coffee" → parks, nature reserves, viewpoints, cafes. For "cultural day" → museums, galleries, theatres. DO NOT default to just walking + restaurant unless that's what the user wants.
 
-CRITICAL: User wants "${request.userInput}" - stick EXACTLY to this theme. No creative additions.
+2. USE APPROPRIATE SEARCH TYPES: You have access to these place types:
+   - Entertainment: cinema, theatre, nightclub, bar, pub, music_venue, casino
+   - Shopping: shop, mall, clothing, bookshop
+   - Culture: museum, gallery, library, monument, castle, church
+   - Nature: park, garden, beach, viewpoint, nature_reserve
+   - Sports: gym, swimming_pool, sports_centre, stadium
+   - Food: restaurant, cafe, fast_food
+   - Attractions: zoo, aquarium, theme_park, spa
+   Match your searches to the user's request!
 
-Return a structured itinerary with 3-5 activities that directly match the user's request and current conditions.`;
+3. SEASON APPROPRIATENESS: It's ${month} (${season}) - ABSOLUTELY NO outdoor festivals, concerts, or summer events. NO beach, swimming, or water activities if temperature is below 15°C.
+
+4. USER INTENT MATCHING: ONLY suggest activities DIRECTLY matching user's request. Analyze keywords: "shopping" → malls/shops, "cinema" → cinemas, "nightlife" → bars/nightclubs, "culture" → museums/galleries, "nature" → parks/trails.
+
+5. TEMPERATURE AWARENESS: ${weather.temperature}°C - If below 10°C, prioritize indoor venues (museums, cinemas, malls, cafes, gyms). Outdoor activities only if explicitly requested and weather-appropriate.
+
+6. DAY CONSTRAINTS: ${dayContext.dayOfWeek} - Respect opening hours and day-specific closures
+
+7. NO FAKE EVENTS: Do NOT invent events. Only suggest permanent venues you can search for.
+
+8. ROUTE OPTIMIZATION: Minimize travel distance within ${request.radius}km radius
+
+CRITICAL: User wants "${request.userInput}" - analyze this carefully and search for RELEVANT place types. Don't default to generic walking + eating!
+
+Return a structured itinerary with 3-5 diverse activities that directly match the user's request and current conditions.`;
 
     const userMessage = `Create a day plan for: "${request.userInput}"
 
@@ -374,19 +390,29 @@ Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest sea
       },
       {
         name: 'search_places',
-        description: 'Search for restaurants, cafes, attractions',
+        description: 'Search for venues and places. Use this for: restaurants, cafes, bars, nightclubs, shops, malls, cinemas, theatres, museums, galleries, parks, beaches, gyms, swimming pools, monuments, churches, viewpoints, hotels, spas, and more.',
         parameters: {
           type: 'object',
           properties: {
             type: {
               type: 'string',
-              description: 'Place type: restaurant, cafe, museum, park, etc.',
+              enum: [
+                'restaurant', 'cafe', 'bar', 'pub', 'nightclub', 'fast_food',
+                'shop', 'mall', 'shopping', 'supermarket', 'bookshop', 'clothing',
+                'cinema', 'theatre', 'museum', 'gallery', 'library', 'music_venue', 'casino',
+                'park', 'garden', 'nature_reserve', 'beach', 'viewpoint',
+                'sports_centre', 'swimming_pool', 'fitness_centre', 'gym', 'stadium',
+                'attraction', 'monument', 'castle', 'church', 'zoo', 'aquarium', 'theme_park',
+                'hotel', 'spa'
+              ],
+              description: 'Specific place type to search for',
             },
             query: {
               type: 'string',
-              description: 'Search query',
+              description: 'Additional search terms or keywords',
             },
           },
+          required: ['type'],
         },
       },
     ];
