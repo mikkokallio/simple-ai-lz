@@ -4,10 +4,13 @@ import { useState } from 'react';
 import RealTimeDictation from './components/RealTimeDictation';
 import PostFactoUpload from './components/PostFactoUpload';
 import DocumentViewer from './components/DocumentViewer';
+import LanguageSelector from './components/LanguageSelector';
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
 type Mode = 'realtime' | 'upload' | null;
 
-export default function Home() {
+function HomeContent() {
+  const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>(null);
   const [currentDocument, setCurrentDocument] = useState<any>(null);
 
@@ -24,9 +27,12 @@ export default function Home() {
     <main className="min-h-screen bg-gray-100">
       {/* Header */}
       <header className="bg-blue-600 text-white p-6 shadow-lg">
-        <div className="container mx-auto">
-          <h1 className="text-3xl font-bold">Terveydenhuollon Transkriptio</h1>
-          <p className="mt-2 text-blue-100">AI-avusteinen kliininen dokumentointi</p>
+        <div className="container mx-auto flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold">{t('appTitle')}</h1>
+            <p className="mt-2 text-blue-100">{t('appSubtitle')}</p>
+          </div>
+          <LanguageSelector />
         </div>
       </header>
 
@@ -34,9 +40,9 @@ export default function Home() {
         {!mode && !currentDocument && (
           <div className="max-w-4xl mx-auto">
             <div className="card mb-8">
-              <h2 className="text-2xl font-bold mb-4 text-gray-800">Valitse toimintatila</h2>
+              <h2 className="text-2xl font-bold mb-4 text-gray-800">{t('selectMode')}</h2>
               <p className="text-gray-600 mb-6">
-                Aloita joko reaaliaikainen sanelu tai lataa aikaisempi nauhoite.
+                {t('selectModeDescription')}
               </p>
 
               <div className="grid md:grid-cols-2 gap-6">
@@ -49,11 +55,10 @@ export default function Home() {
                     <svg className="w-8 h-8 text-blue-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                     </svg>
-                    <h3 className="text-xl font-bold text-gray-800">Reaaliaikainen sanelu</h3>
+                    <h3 className="text-xl font-bold text-gray-800">{t('realtimeMode')}</h3>
                   </div>
                   <p className="text-gray-600">
-                    Käytä mikrofonia ja sanele käynti reaaliaikaisesti. 
-                    Transkriptio tapahtuu välittömästi.
+                    {t('realtimeModeDescription')}
                   </p>
                 </button>
 
@@ -66,11 +71,10 @@ export default function Home() {
                     <svg className="w-8 h-8 text-green-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                     </svg>
-                    <h3 className="text-xl font-bold text-gray-800">Lataa nauhoite</h3>
+                    <h3 className="text-xl font-bold text-gray-800">{t('uploadMode')}</h3>
                   </div>
                   <p className="text-gray-600">
-                    Lataa aikaisempi äänitallennus ja anna AI:n luoda 
-                    strukturoidun muistiinpanon.
+                    {t('uploadModeDescription')}
                   </p>
                 </button>
               </div>
@@ -78,11 +82,9 @@ export default function Home() {
 
             {/* Info Section */}
             <div className="card bg-blue-50 border border-blue-200">
-              <h3 className="text-lg font-bold text-blue-900 mb-2">Tietoturvasta</h3>
+              <h3 className="text-lg font-bold text-blue-900 mb-2">{t('securityTitle')}</h3>
               <p className="text-blue-800 text-sm">
-                Kaikki data käsitellään turvallisesti Azuren palveluissa. 
-                Käyttäjätunnistus Entra ID:llä, datasiirto salattu, ja 
-                tallennus GDPR-yhteensopiva.
+                {t('securityDescription')}
               </p>
             </div>
           </div>
@@ -110,5 +112,13 @@ export default function Home() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <LanguageProvider>
+      <HomeContent />
+    </LanguageProvider>
   );
 }
