@@ -5,8 +5,26 @@ const { CosmosClient } = require('@azure/cosmos');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const { AzureOpenAI } = require('openai');
 
+const serverStartTime = Date.now();
+console.log(`[STARTUP] Server initialization started at ${new Date().toISOString()}`);
+
 const app = express();
 const port = process.env.PORT || 80;
+
+// Performance logging middleware
+app.use((req, res, next) => {
+  const requestStart = Date.now();
+  const originalSend = res.send;
+  
+  res.send = function(data) {
+    const duration = Date.now() - requestStart;
+    const memUsage = process.memoryUsage();
+    console.log(`[PERF] ${req.method} ${req.path} - ${res.statusCode} - ${duration}ms - Memory: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB/${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`);
+    return originalSend.call(this, data);
+  };
+  
+  next();
+});
 
 // CORS configuration
 app.use(cors({
@@ -20,14 +38,25 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 
 // Initialize Azure clients using Managed Identity
+console.log('[STARTUP] Initializing Azure clients with Managed Identity...');
+const credentialStart = Date.now();
 const credential = new DefaultAzureCredential();
+console.log(`[STARTUP] DefaultAzureCredential created in ${Date.now() - credentialStart}ms`);
 
 // Cosmos DB client
 const cosmosEndpoint = process.env.COSMOS_ENDPOINT;
-const cosmosClient = cosmosEndpoint ? new CosmosClient({ 
-  endpoint: cosmosEndpoint, 
-  aadCredentials: credential 
-}) : null;
+let cosmosClient = null;
+if (cosmosEndpoint) {
+  const cosmosStart = Date.now();
+  console.log(`[STARTUP] Initializing Cosmos DB client for ${cosmosEndpoint}...`);
+  cosmosClient = new CosmosClient({ 
+    endpoint: cosmosEndpoint, 
+    aadCredentials: credential 
+  });
+  console.log(`[STARTUP] Cosmos DB client initialized in ${Date.now() - cosmosStart}ms`);
+} else {
+  console.log('[STARTUP] Cosmos DB not configured (COSMOS_ENDPOINT not set)');
+}
 
 let database, container;
 if (cosmosClient) {
@@ -38,23 +67,40 @@ if (cosmosClient) {
 // OpenAI client
 const openAIEndpoint = process.env.AZURE_OPENAI_ENDPOINT;
 const openAIDeployment = process.env.AZURE_OPENAI_DEPLOYMENT;
-const openAIClient = openAIEndpoint ? new AzureOpenAI({
-  endpoint: openAIEndpoint,
-  azureADTokenProvider: async () => {
-    const token = await credential.getToken('https://cognitiveservices.azure.com/.default');
-    return token.token;
-  },
-  apiVersion: '2024-08-01-preview',
-  deployment: openAIDeployment
-}) : null;
+let openAIClient = null;
+if (openAIEndpoint) {
+  const openAIStart = Date.now();
+  console.log(`[STARTUP] Initializing OpenAI client for ${openAIEndpoint}...`);
+  openAIClient = new AzureOpenAI({
+    endpoint: openAIEndpoint,
+    azureADTokenProvider: async () => {
+      const tokenStart = Date.now();
+      const token = await credential.getToken('https://cognitiveservices.azure.com/.default');
+      console.log(`[AUTH] OpenAI token acquired in ${Date.now() - tokenStart}ms`);
+      return token.token;
+    },
+    apiVersion: '2024-08-01-preview',
+    deployment: openAIDeployment
+  });
+  console.log(`[STARTUP] OpenAI client initialized in ${Date.now() - openAIStart}ms`);
+} else {
+  console.log('[STARTUP] OpenAI not configured (AZURE_OPENAI_ENDPOINT not set)');
+}
 
 // Storage client
 const storageAccountName = process.env.STORAGE_ACCOUNT_NAME;
-const blobServiceClient = storageAccountName ? 
-  new BlobServiceClient(
+let blobServiceClient = null;
+if (storageAccountName) {
+  const storageStart = Date.now();
+  console.log(`[STARTUP] Initializing Storage client for ${storageAccountName}...`);
+  blobServiceClient = new BlobServiceClient(
     `https://${storageAccountName}.blob.core.windows.net`,
     credential
-  ) : null;
+  );
+  console.log(`[STARTUP] Storage client initialized in ${Date.now() - storageStart}ms`);
+} else {
+  console.log('[STARTUP] Storage not configured (STORAGE_ACCOUNT_NAME not set)');
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -64,7 +110,7 @@ app.get('/health', (req, res) => {
 // Get Speech Service token
 app.get('/api/getSpeechToken', async (req, res) => {
   const startTime = Date.now();
-  console.log('[getSpeechToken] Request received');
+  console.log(`[getSpeechToken] Request received at ${new Date().toISOString()}`);
   
   try {
     const speechKey = process.env.AZURE_SPEECH_KEY;
@@ -75,6 +121,9 @@ app.get('/api/getSpeechToken', async (req, res) => {
       return res.status(500).json({ error: 'Speech service not configured' });
     }
 
+    console.log(`[getSpeechToken] Initiating token exchange with Speech Service...`);
+    const fetchStart = Date.now();
+    
     // Exchange API key for a time-limited token (10 minutes)
     const tokenResponse = await fetch(
       `https://${speechRegion}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,
@@ -86,22 +135,27 @@ app.get('/api/getSpeechToken', async (req, res) => {
         }
       }
     );
+    
+    console.log(`[getSpeechToken] Token exchange response received in ${Date.now() - fetchStart}ms, status: ${tokenResponse.status}`);
 
     if (!tokenResponse.ok) {
       throw new Error(`Token exchange failed: ${tokenResponse.status} ${tokenResponse.statusText}`);
     }
 
+    const textStart = Date.now();
     const token = await tokenResponse.text(); // Token is returned as plain text
+    console.log(`[getSpeechToken] Token text parsed in ${Date.now() - textStart}ms, length: ${token.length}`);
 
     const duration = Date.now() - startTime;
-    console.log(`[getSpeechToken] Token issued, duration: ${duration}ms`);
+    console.log(`[getSpeechToken] ✓ Token issued successfully, total duration: ${duration}ms`);
     
     res.json({
       token: token, // Time-limited token, not the API key
       region: speechRegion
     });
   } catch (error) {
-    console.error('[getSpeechToken] Error:', error);
+    const duration = Date.now() - startTime;
+    console.error(`[getSpeechToken] ✗ Error after ${duration}ms:`, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -494,8 +548,21 @@ app.get('/api/getDocument/:documentId', async (req, res) => {
 
 // Start server
 app.listen(port, '0.0.0.0', () => {
-  console.log(`Healthcare Triage API listening on port ${port}`);
-  console.log(`OpenAI configured: ${!!openAIClient}`);
-  console.log(`Cosmos DB configured: ${!!container}`);
-  console.log(`Blob Storage configured: ${!!blobServiceClient}`);
+  const startupDuration = Date.now() - serverStartTime;
+  const memUsage = process.memoryUsage();
+  
+  console.log(`\n========================================`);
+  console.log(`[STARTUP] Healthcare Triage API listening on port ${port}`);
+  console.log(`[STARTUP] Total startup time: ${startupDuration}ms`);
+  console.log(`[STARTUP] OpenAI configured: ${!!openAIClient}`);
+  console.log(`[STARTUP] Cosmos DB configured: ${!!container}`);
+  console.log(`[STARTUP] Blob Storage configured: ${!!blobServiceClient}`);
+  console.log(`[STARTUP] Memory usage: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB heap used, ${Math.round(memUsage.heapTotal / 1024 / 1024)}MB heap total, ${Math.round(memUsage.rss / 1024 / 1024)}MB RSS`);
+  console.log(`========================================\n`);
+  
+  // Log memory usage every 30 seconds
+  setInterval(() => {
+    const mem = process.memoryUsage();
+    console.log(`[MEMORY] Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB/${Math.round(mem.heapTotal / 1024 / 1024)}MB, RSS: ${Math.round(mem.rss / 1024 / 1024)}MB, External: ${Math.round(mem.external / 1024 / 1024)}MB`);
+  }, 30000);
 });

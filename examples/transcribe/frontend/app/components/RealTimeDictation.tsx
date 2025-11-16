@@ -38,28 +38,43 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
     try {
       setError(null);
       setIsInitializing(true); // Show loading state
-      console.log('[Recording] Starting recording...');
-      const startTime = performance.now();
+      
+      const overallStart = performance.now();
+      console.log(`[PERF] startRecording initiated at ${new Date().toISOString()}`);
       
       // Get Speech token from backend
       const apiBase = getApiBaseUrl();
-      console.log('[Recording] Fetching speech token from:', `${apiBase}/api/getSpeechToken`);
+      console.log(`[PERF] API base URL: ${apiBase}`);
+      
+      const fetchStart = performance.now();
+      console.log(`[PERF] Fetching speech token from: ${apiBase}/api/getSpeechToken`);
       
       const tokenResponse = await fetch(`${apiBase}/api/getSpeechToken`);
+      const fetchDuration = performance.now() - fetchStart;
+      console.log(`[PERF] Token fetch completed in ${Math.round(fetchDuration)}ms, status: ${tokenResponse.status}`);
+      
       if (!tokenResponse.ok) {
         throw new Error('Failed to get speech token');
       }
+      
+      const jsonStart = performance.now();
       const { token, region } = await tokenResponse.json();
-      console.log('[Recording] Token received, region:', region, 'time:', Math.round(performance.now() - startTime), 'ms');
+      const jsonDuration = performance.now() - jsonStart;
+      console.log(`[PERF] Token JSON parsed in ${Math.round(jsonDuration)}ms, region: ${region}, token length: ${token.length}`);
       
       // Use fromAuthorizationToken for token-based authentication (not fromSubscription)
+      const configStart = performance.now();
       const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
       const speechLanguage = languageMap[language];
       speechConfig.speechRecognitionLanguage = speechLanguage;
-      console.log('[Recording] Using speech recognition language:', speechLanguage);
+      const configDuration = performance.now() - configStart;
+      console.log(`[PERF] Speech config created in ${Math.round(configDuration)}ms, language: ${speechLanguage}`);
 
+      const audioStart = performance.now();
       const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
       const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+      const audioDuration = performance.now() - audioStart;
+      console.log(`[PERF] Audio config and recognizer created in ${Math.round(audioDuration)}ms`);
 
       recognizerRef.current = recognizer;
       lastOffsetRef.current = 0; // Reset offset tracking
@@ -93,13 +108,15 @@ export default function RealTimeDictation({ onDocumentCreated, onCancel }: Props
 
       recognizer.startContinuousRecognitionAsync(
         () => {
-          console.log('[Recording] Recognition started successfully, time:', Math.round(performance.now() - startTime), 'ms');
+          const totalDuration = performance.now() - overallStart;
+          console.log(`[PERF] ✓ Recognition started successfully, total time: ${Math.round(totalDuration)}ms`);
           setIsRecording(true);
           setIsInitializing(false);
         },
         (err) => {
+          const totalDuration = performance.now() - overallStart;
           setError(`${t('errorStartingRecording')}: ${err}`);
-          console.error('[Recording] Error starting recognition:', err);
+          console.error(`[PERF] ✗ Error starting recognition after ${Math.round(totalDuration)}ms:`, err);
           setIsInitializing(false);
         }
       );

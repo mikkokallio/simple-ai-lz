@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import RealTimeDictation from './components/RealTimeDictation';
 import PostFactoUpload from './components/PostFactoUpload';
 import DocumentViewer from './components/DocumentViewer';
@@ -13,6 +13,26 @@ function HomeContent() {
   const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>(null);
   const [currentDocument, setCurrentDocument] = useState<any>(null);
+
+  // Performance logging on mount
+  useEffect(() => {
+    const navigationStart = performance.timing?.navigationStart || 0;
+    const domContentLoaded = performance.timing?.domContentLoadedEventEnd || 0;
+    const loadComplete = performance.timing?.loadEventEnd || 0;
+    
+    if (navigationStart && domContentLoaded) {
+      const domLoadTime = domContentLoaded - navigationStart;
+      console.log(`[PERF] DOM Content Loaded: ${domLoadTime}ms`);
+    }
+    
+    if (navigationStart && loadComplete) {
+      const totalLoadTime = loadComplete - navigationStart;
+      console.log(`[PERF] Page Load Complete: ${totalLoadTime}ms`);
+    }
+    
+    // Log when React has hydrated
+    console.log(`[PERF] React component mounted at: ${performance.now()}ms`);
+  }, []);
 
   const handleDocumentCreated = (doc: any) => {
     setCurrentDocument(doc);
