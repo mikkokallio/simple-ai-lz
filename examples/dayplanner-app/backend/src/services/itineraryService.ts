@@ -153,7 +153,28 @@ MANDATORY RULES:
 
 CRITICAL: User wants "${request.userInput}" - analyze this carefully and search for RELEVANT place types. Don't default to generic walking + eating!
 
-Return a structured itinerary with 3-5 diverse activities that directly match the user's request and current conditions.`;
+WORKFLOW:
+1. Call search_places multiple times (2-5 times) to find different types of venues matching the user's interests
+2. Call search_events to check for relevant events (but remember: no fake events!)
+3. Once you have search results, create a structured itinerary
+
+FINAL RESPONSE FORMAT:
+When you're ready to create the itinerary, respond with a JSON object:
+{
+  "activities": [
+    {
+      "name": "Activity name",
+      "description": "Brief description",
+      "type": "dining|entertainment|culture|outdoor|shopping|sport",
+      "location": { "lat": number, "lon": number, "address": "address" },
+      "startTime": "HH:MM",
+      "duration": number (minutes),
+      "weatherDependent": boolean
+    }
+  ]
+}
+
+Start times should be realistic (e.g., 10:00, 12:30, 15:00, 18:30) and activities should be in chronological order.`;
 
     const userMessage = `Create a day plan for: "${request.userInput}"
 
@@ -164,25 +185,62 @@ Transport: ${request.preferences.transportModes?.join(', ') || 'walking'}
 Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest seasonally appropriate activities that match my interests!`;
 
     try {
-      const response = await this.openaiClient.chat.completions.create({
+      // Make initial AI call with function definitions
+      const functions = this.getFunctionDefinitions(request);
+      
+      let response = await this.openaiClient.chat.completions.create({
         model: 'gpt-4o',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
         ],
-        functions: this.getFunctionDefinitions(request),
+        functions,
         function_call: 'auto',
         max_completion_tokens: 2000,
       });
 
-      // Handle function calls
-      const message = response.choices[0]?.message;
-      if (message?.function_call) {
-        await this.handleFunctionCall(message.function_call, request);
-        // In a real implementation, continue the conversation with function results
+      let message = response.choices[0]?.message;
+      
+      // Execute function calls and collect results
+      const searchResults: any = {
+        places: [],
+        events: [],
+      };
+
+      // If AI wants to call functions, execute them
+      // Note: We'll do up to 5 function calls to gather data
+      for (let i = 0; i < 5 && message?.function_call; i++) {
+        const functionResult = await this.handleFunctionCall(message.function_call, request);
+        
+        // Store results by type
+        if (message.function_call.name === 'search_places') {
+          searchResults.places.push(...(functionResult || []));
+        } else if (message.function_call.name === 'search_events') {
+          searchResults.events.push(...(functionResult || []));
+        }
+
+        // Make another AI call to see if it wants to search more
+        response = await this.openaiClient.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+            { role: 'assistant', content: null, function_call: message.function_call },
+            { role: 'user', content: `Found ${(functionResult || []).length} results. Search for more if needed, or create the itinerary.` },
+          ],
+          functions,
+          function_call: 'auto',
+          max_completion_tokens: 2000,
+        });
+
+        message = response.choices[0]?.message;
       }
 
-      // For now, generate a basic itinerary structure
+      // Now generate activities using the search results
+      console.log(`Collected ${searchResults.places.length} places and ${searchResults.events.length} events`);
+      const activities = await this.generateActivitiesFromResults(request, searchResults, dayContext, weather);
+
+      // Generate itinerary structure
       const itinerary: Itinerary = {
         id: uuidv4(),
         userId: request.userId,
@@ -206,7 +264,7 @@ Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest sea
           dietary: request.preferences.dietary || [],
           includeEvents: request.preferences.includeEvents !== false,
         },
-        activities: await this.generateActivities(request, dayContext, weather),
+        activities,
         weather,
         totalDistance: 0,
         totalDuration: 0,
@@ -220,6 +278,188 @@ Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest sea
     } catch (error) {
       console.error('Error in AI generation:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Generate activities from search results
+   */
+  private async generateActivitiesFromResults(
+    request: GenerateItineraryRequest,
+    searchResults: any,
+    dayContext: any,
+    weather: any
+  ): Promise<Activity[]> {
+    const activities: Activity[] = [];
+    let currentTime = new Date(request.date);
+    currentTime.setHours(10, 0, 0, 0); // Start at 10 AM
+
+    // Use places from search results
+    const places = searchResults.places || [];
+    const events = searchResults.events || [];
+
+    console.log(`Generating activities from ${places.length} places and ${events.length} events`);
+
+    // Add places as activities
+    for (let i = 0; i < Math.min(places.length, 5); i++) {
+      const place = places[i];
+      
+      activities.push({
+        id: uuidv4(),
+        type: this.mapPlaceTypeToActivityType(place.type),
+        name: place.name,
+        description: place.description || `Visit ${place.name}`,
+        location: {
+          lat: place.location?.lat || request.location.lat,
+          lon: place.location?.lon || request.location.lon,
+          address: place.location?.address || place.name,
+        },
+        startTime: new Date(currentTime),
+        duration: 60, // Default 60 minutes
+        weatherDependent: place.type === 'park' || place.type === 'outdoor',
+      });
+
+      currentTime = new Date(currentTime.getTime() + 90 * 60 * 1000); // 60 min activity + 30 min travel
+    }
+
+    // Add events if any
+    for (const event of events.slice(0, 2)) {
+      activities.push({
+        id: uuidv4(),
+        type: 'entertainment',
+        name: event.name,
+        description: event.description || 'Local event',
+        location: {
+          lat: event.location?.lat || request.location.lat,
+          lon: event.location?.lon || request.location.lon,
+          address: event.location?.address || 'Event location',
+        },
+        startTime: event.startTime ? new Date(event.startTime) : new Date(currentTime),
+        duration: event.duration || 120,
+        weatherDependent: false,
+      });
+    }
+
+    // If no results, use fallback
+    if (activities.length === 0) {
+      console.log('No search results, using fallback activities');
+      return this.generateActivities(request, dayContext, weather);
+    }
+
+    // Calculate travel between activities
+    for (let i = 0; i < activities.length - 1; i++) {
+      const from = activities[i].location;
+      const to = activities[i + 1].location;
+      const distance = this.calculateDistance(from, to);
+      
+      activities[i].travelToNext = {
+        mode: 'walk',
+        distance: distance * 1000, // convert to meters
+        duration: Math.round((distance / 5) * 60), // 5 km/h walking speed
+      };
+    }
+
+    return activities;
+  }
+
+  /**
+   * Map place type to activity type
+   */
+  private mapPlaceTypeToActivityType(placeType: string): 'dining' | 'entertainment' | 'culture' | 'outdoor' | 'sightseeing' | 'event' | 'travel' {
+    const mapping: Record<string, any> = {
+      restaurant: 'dining',
+      cafe: 'dining',
+      bar: 'dining',
+      pub: 'dining',
+      museum: 'culture',
+      gallery: 'culture',
+      theatre: 'entertainment',
+      cinema: 'entertainment',
+      nightclub: 'entertainment',
+      park: 'outdoor',
+      garden: 'outdoor',
+      beach: 'outdoor',
+      gym: 'outdoor',
+      swimming_pool: 'outdoor',
+      shop: 'sightseeing',
+      mall: 'sightseeing',
+      spa: 'sightseeing',
+    };
+
+    return mapping[placeType] || 'sightseeing';
+  }
+
+  /**
+   * Parse AI's final response to extract activities (legacy fallback)
+   */
+  private async parseAIResponse(response: any, request: GenerateItineraryRequest): Promise<Activity[]> {
+    try {
+      if (!response || !response.content) {
+        console.log('No AI response content, using fallback');
+        return this.generateActivities(request, {}, {});
+      }
+
+      // Try to parse JSON from AI response
+      const content = response.content.trim();
+      let parsedData: any;
+
+      // Look for JSON object in the response
+      const jsonMatch = content.match(/\{[\s\S]*"activities"[\s\S]*\}/);
+      if (jsonMatch) {
+        parsedData = JSON.parse(jsonMatch[0]);
+      } else {
+        console.log('No JSON found in AI response, using fallback');
+        return this.generateActivities(request, {}, {});
+      }
+
+      if (!parsedData.activities || !Array.isArray(parsedData.activities)) {
+        console.log('Invalid activities format, using fallback');
+        return this.generateActivities(request, {}, {});
+      }
+
+      // Convert AI's structured activities to Activity objects
+      const activities: Activity[] = [];
+      const baseDate = new Date(request.date);
+
+      for (const actData of parsedData.activities) {
+        const [hours, minutes] = actData.startTime.split(':').map(Number);
+        const startTime = new Date(baseDate);
+        startTime.setHours(hours, minutes, 0, 0);
+
+        activities.push({
+          id: uuidv4(),
+          type: actData.type || 'other',
+          name: actData.name,
+          description: actData.description,
+          location: {
+            lat: actData.location.lat,
+            lon: actData.location.lon,
+            address: actData.location.address,
+          },
+          startTime,
+          duration: actData.duration,
+          weatherDependent: actData.weatherDependent !== false,
+        });
+      }
+
+      // Calculate travel between activities
+      for (let i = 0; i < activities.length - 1; i++) {
+        const from = activities[i].location;
+        const to = activities[i + 1].location;
+        const distance = this.calculateDistance(from, to);
+        
+        activities[i].travelToNext = {
+          mode: 'walk',
+          distance: distance * 1000, // convert to meters
+          duration: Math.round((distance / 5) * 60), // 5 km/h walking speed
+        };
+      }
+
+      console.log(`Parsed ${activities.length} activities from AI response`);
+      return activities;
+    } catch (error) {
+      console.error('Error parsing AI response:', error);
+      return this.generateActivities(request, {}, {});
     }
   }
 
