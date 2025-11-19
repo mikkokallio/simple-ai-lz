@@ -1,103 +1,256 @@
-# Azure AI Landing Zone - MVP
+# Azure AI Landing Zone
 
-A secure, production-like Azure infrastructure for AI-powered applications with VNet isolation, managed identities, and comprehensive security controls.
+Secure, production-ready Azure infrastructure for AI-powered applications with Hub-Spoke architecture, private networking, and zero-trust security.
 
-## Overview
+## Architecture
 
-This MVP deployment includes:
+### Hub-Spoke Design
+```
+Hub (rg-connectivity-hub) - Shared Connectivity
+├── VPN Gateway (Point-to-Site, Entra ID auth)
+├── DNS Resolver (10.1.1.4)
+└── Hub VNet (10.1.0.0/16)
+         │
+         ├──── VNet Peering ────> Landing Zone VNets
+         │
+Lab Environment (rg-ailz-lab)
+├── Apps VNet (10.0.0.0/16)
+├── Container Apps Environment (internal, VNet-integrated)
+├── Cosmos DB (serverless, private endpoint only)
+├── Storage, Key Vault, AI Services (all with private endpoints)
+└── Running applications
+```
 
-- ✅ **Virtual Network** with isolated subnets
-- ✅ **Container Apps Environment** (shared, consumption-based)
-- ✅ **Azure Storage** with Defender for malware scanning
-- ✅ **Azure Key Vault** with RBAC
-- ✅ **Log Analytics & Application Insights** for monitoring
-- ✅ **Private Endpoints** for all PaaS services
-- ✅ **Network Security Groups** with appropriate rules
+### Key Features
 
-## Prerequisites
-
-1. **Azure Subscription** with appropriate permissions (Contributor or Owner)
-2. **Azure CLI** installed ([Install Guide](https://docs.microsoft.com/cli/azure/install-azure-cli))
-3. **PowerShell** 5.1 or later (Windows) or PowerShell Core (cross-platform)
+- ✅ **Hub-Spoke Network**: Centralized connectivity for multiple landing zones
+- ✅ **Private Networking**: All PaaS services use private endpoints only
+- ✅ **Zero-Trust Security**: Managed identities, no access keys, RBAC everywhere
+- ✅ **VPN Access**: Secure developer access via Entra ID authentication
+- ✅ **Shared Infrastructure**: Multitenancy with one CAE, Cosmos DB, Storage per landing zone
+- ✅ **Cost Optimized**: Consumption-based Container Apps, serverless Cosmos DB
 
 ## Quick Start
 
-### 1. Clone or Download
+### Prerequisites
 
-Download this repository to your local machine.
+1. **Azure Subscription** with Contributor or Owner permissions
+2. **Azure CLI** installed ([Install Guide](https://learn.microsoft.com/cli/azure/install-azure-cli))
+3. **Entra ID tenant** (for VPN authentication)
 
-### 2. Update Parameters
+### Deploy Landing Zone
 
-Edit `main.bicepparam` and update the required parameters:
+1. **Login to Azure**
+   ```bash
+   az login
+   az account set --subscription "Your Subscription Name"
+   ```
+
+2. **Edit Parameters**
+   
+   Edit `main.bicepparam`:
+   ```bicep
+   param ownerEmail = 'your.email@example.com'
+   param location = 'swedencentral'
+   ```
+
+3. **Deploy Infrastructure**
+   ```bash
+   az deployment sub create \
+     --name ailz-deployment \
+     --location swedencentral \
+     --template-file main.bicep \
+     --parameters main.bicepparam
+   ```
+
+   Deployment time: ~15-20 minutes
+
+4. **Deploy Hub (Optional - for VPN access)**
+   
+   Edit `hub.bicepparam` and deploy:
+   ```bash
+   az deployment sub create \
+     --name hub-deployment \
+     --location swedencentral \
+     --template-file hub.bicep \
+     --parameters hub.bicepparam
+   ```
+
+### Region Recommendation
+
+**Use `swedencentral`** - Modern datacenter with full AI service capacity.  
+Avoid `westeurope` and `northeurope` due to capacity constraints.
+
+## What Gets Deployed
+
+### Landing Zone Resources (main.bicep)
+
+| Resource | Configuration | Purpose |
+|----------|--------------|---------|
+| **Container Apps Environment** | Internal, VNet-integrated | Shared runtime for all apps |
+| **Cosmos DB** | Serverless, private endpoint | Shared NoSQL database |
+| **Storage Account** | Private endpoint, Defender enabled | Shared blob storage |
+| **Key Vault** | Private endpoint, RBAC | Secrets management |
+| **AI Services** | Document Intelligence, Translator | AI capabilities |
+| **AI Foundry** | Optional, for ML workloads | AI model deployment |
+| **Monitoring** | Log Analytics, App Insights | Observability |
+
+### Hub Resources (hub.bicep) - Optional
+
+| Resource | Configuration | Purpose |
+|----------|--------------|---------|
+| **VPN Gateway** | Point-to-Site, Entra ID | Secure developer access |
+| **DNS Resolver** | Inbound endpoint | Private DNS resolution |
+| **Hub VNet** | 10.1.0.0/16 | Connectivity hub |
+
+## Security Features
+
+### Network Isolation
+- All PaaS services: `publicNetworkAccess: 'Disabled'`
+- Private endpoints in dedicated subnet (10.0.2.0/24)
+- Container Apps Environment: `internal: true`
+- Network Security Groups on all subnets
+
+### Identity & Access
+- **Managed Identities**: All apps use SystemAssigned identity
+- **No Access Keys**: Storage enforces `allowSharedKeyAccess: false`
+- **RBAC Roles**: Cosmos DB Data Contributor, Storage Blob Data Contributor
+- **Key Vault**: RBAC-only access (no access policies)
+
+### Compliance
+- **TLS 1.2** minimum on all services
+- **Microsoft Defender** for Storage (malware scanning)
+- **Diagnostic Settings**: All resources log to Log Analytics
+- **Azure Policy**: Ready for policy assignments
+
+## Cost Estimate
+
+| Component | Monthly Cost | Notes |
+|-----------|-------------|-------|
+| Container Apps | ~$0-10 | Consumption plan, scales to zero |
+| Cosmos DB | ~$0-50 | Serverless, free tier available* |
+| Storage | ~$5-10 | Standard LRS, Defender included |
+| Key Vault | ~$1-2 | Pay per operation |
+| AI Services | ~$10-50 | Pay as you go |
+| Monitoring | ~$10-20 | 30-day retention |
+| **VPN Gateway** | **~$140/month** | Optional, only if Hub deployed |
+| **DNS Resolver** | **~$50/month** | Optional, only if Hub deployed |
+
+**Total without Hub**: ~$30-150/month  
+**Total with Hub**: ~$220-360/month
+
+*Free tier: Not available for Microsoft internal subscriptions
+
+## Deploying Applications
+
+Applications should reference the shared infrastructure:
 
 ```bicep
-param ownerEmail = 'your.email@example.com'  // Required
-param location = 'swedencentral'             // Optional (default: swedencentral)
+// Reference shared resources (don't create new ones)
+param containerAppsEnvironmentId string  // From landing zone
+param cosmosDbAccountName string         // From landing zone
+param storageAccountName string          // From landing zone
+
+// Create app-specific resources only
+resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2023-11-15' = {
+  parent: existingCosmosAccount
+  name: 'my-app-db'
+}
+
+resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
+  name: 'my-app'
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    managedEnvironmentId: containerAppsEnvironmentId
+    // ... app configuration
+  }
+}
 ```
 
-**Note**: `swedencentral` is recommended as it has modern datacenter infrastructure with full AI service capacity. Avoid `westeurope` and `northeurope` due to capacity constraints.
+See `examples/` folder for complete application deployments.
 
-### 3. Login to Azure
+## Documentation
 
-```bash
-az login
-az account set --subscription "Your Subscription Name"  # If you have multiple subscriptions
+- **[LESSONS_LEARNED.md](LESSONS_LEARNED.md)** - Critical learnings from implementation
+- **[req_spec.txt](req_spec.txt)** - Original requirements and design decisions
+- **[examples/](examples/)** - Sample applications with deployment guides
+
+## Troubleshooting
+
+### Deployment Failures
+
+**Problem**: AI Foundry deployment fails  
+**Solution**: Ensure API version `@2025-06-01` and `allowProjectManagement: true`
+
+**Problem**: Cosmos DB free tier error  
+**Solution**: Set `enableCosmosFreeTier: false` for Microsoft internal subscriptions
+
+**Problem**: Container Apps not accessible  
+**Solution**: Verify `ingress.external: true` for VNet-accessible apps
+
+### Network Connectivity
+
+**Problem**: VPN connected but can't access apps  
+**Solution**: Check VPN interface has DNS server configured (10.1.1.4)
+
+**Problem**: Apps can't reach Cosmos DB  
+**Solution**: Verify managed identity and RBAC role assignment
+
+For detailed troubleshooting, see [LESSONS_LEARNED.md](LESSONS_LEARNED.md).
+
+## Multi-Environment Deployments
+
+Deploy multiple isolated environments sharing the same Hub:
+
+1. **Create new parameter file**: `main-demo.bicepparam`
+2. **Use unique values**:
+   ```bicep
+   param resourceGroupName = 'rg-ailz-demo'
+   param uniqueSuffix = 'demo01'
+   param vnetAddressPrefix = '10.2.0.0/16'  // Non-overlapping
+   ```
+3. **Deploy**: `az deployment sub create --parameters main-demo.bicepparam`
+
+**Pro tip**: Version resource groups during development (`rg-ailz-demo-v1`, `-v2`, `-v3`...) for easy cleanup and comparison.
+
+## Repository Structure
+
+```
+simple-ai-lz/
+├── main.bicep                 # Landing zone infrastructure
+├── main.bicepparam           # Default parameters
+├── hub.bicep                 # Hub connectivity (VPN, DNS)
+├── hub.bicepparam           # Hub parameters
+├── modules/                  # Reusable Bicep modules
+│   ├── network.bicep
+│   ├── containerApps.bicep
+│   ├── cosmosdb.bicep
+│   ├── storage.bicep
+│   ├── keyvault.bicep
+│   └── ... (19 modules total)
+└── examples/                 # Sample applications
+    ├── ai-chat-app/
+    ├── apply/
+    ├── dayplanner-app/
+    ├── ocr-translation-app/
+    └── transcribe/
 ```
 
-### 4. Deploy
+## Contributing
 
-**Option A: Use the deployment script (easiest)**
+This is a reference implementation. Feel free to:
+- Adapt for your use case
+- Add new modules for additional Azure services
+- Share improvements via issues/PRs
 
-Windows (Command Prompt):
-```cmd
-deploy.bat
-```
+## License
 
-Bash (Linux/Mac/Git Bash):
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
+MIT License - see [LICENSE](LICENSE) file for details
 
-**Option B: Deploy with parameters file directly**
+---
 
-```bash
-az deployment sub create \
-  --name ailz-mvp-deployment \
-  --location swedencentral \
-  --template-file main.bicep \
-  --parameters main.bicepparam
-```
-
-**Option C: Override parameters at deployment time**
-
-```bash
-az deployment sub create \
-  --name ailz-mvp-deployment \
-  --location swedencentral \
-  --template-file main.bicep \
-  --parameters main.bicepparam \
-  --parameters ownerEmail='your.email@example.com' location='swedencentral'
-```
-
-Deployment takes approximately 15-20 minutes.
-
-### 5. Run Post-Deployment Configuration
-
-**IMPORTANT**: After the main deployment completes, run the post-deployment script to configure VNet DNS:
-
-Windows (PowerShell):
-```powershell
-.\post-deploy.ps1
-```
-
-Linux/Mac (Bash):
-```bash
-chmod +x post-deploy.sh
-./post-deploy.sh
-```
-
-This script:
+**Last Updated**: November 17, 2025  
+**Status**: ✅ Production-ready infrastructure deployed and tested
 - Configures VNet DNS servers to use the DNS Resolver
 - Regenerates VPN client configuration with DNS settings
 - Enables automatic DNS resolution for VPN clients

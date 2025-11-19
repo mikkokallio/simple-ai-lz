@@ -20,6 +20,13 @@ param location = 'swedencentral'
 // If not specified, the current tenant ID will be used
 // param entraIdTenantId = '00000000-0000-0000-0000-000000000000'
 
+// Hub connectivity (for VNet peering to existing Hub)
+param enableHubPeering = true
+param hubVnetId = '/subscriptions/f6f84135-2f56-47ac-b4bf-4202248dd5ee/resourceGroups/rg-connectivity-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-ezle7syi'
+param hubResourceGroupName = 'rg-connectivity-hub'
+param hubVnetName = 'vnet-hub-ezle7syi'
+param hubDnsResolverIp = '10.1.1.4'
+
 // Optional: Customize network address spaces (use defaults if not specified)
 // param vnetAddressPrefix = '10.0.0.0/16'
 // param containerAppsSubnetPrefix = '10.0.0.0/23'

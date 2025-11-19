@@ -1,12 +1,185 @@
 # Lessons Learned - Azure AI Landing Zone Implementation
 
-## Date: November 7, 2025
+## Last Updated: November 17, 2025
 
 This document captures critical lessons learned during the implementation of a secure AI landing zone with VNet isolation, Point-to-Site VPN, and internal Container Apps.
 
 ---
 
-## 1. Container Apps Internal Ingress - Critical Gotcha! ⚠️
+## 1. AI Foundry Deployment Requirements (November 17, 2025) 🆕
+
+### Issue
+AI Foundry deployment failed repeatedly with various errors during demo environment setup:
+- `InvalidApiSetId: The account type 'AIFoundry' is either invalid or unavailable`
+- `Project can only created under AIServices Kind account with allowProjectManagement set to true`
+- `Unsupported configuration. To create accounts or projects, you must enable a managed identity`
+
+### Root Cause
+AI Foundry has specific, undocumented requirements that differ from the Azure Portal deployment:
+
+1. **Wrong `kind`**: Used `kind: 'AIFoundry'` but correct value is `kind: 'AIServices'`
+2. **Outdated API version**: Used `@2024-10-01` but project resource requires `@2025-06-01`
+3. **Missing property**: Account requires `allowProjectManagement: true` to support projects
+4. **Missing identity**: Both account AND project require SystemAssigned managed identity
+
+### Solution - Correct Bicep Configuration
+```bicep
+// AI Foundry Account
+resource aiFoundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
+  name: aiFoundryName
+  kind: 'AIServices'  // NOT 'AIFoundry'!
+  identity: {
+    type: 'SystemAssigned'  // Required
+  }
+  properties: {
+    allowProjectManagement: true  // Required for projects
+    publicNetworkAccess: 'Disabled'
+    disableLocalAuth: true
+  }
+}
+
+// AI Foundry Project
+resource aiFoundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
+  parent: aiFoundry
+  name: projectName
+  identity: {
+    type: 'SystemAssigned'  // Also required on project!
+  }
+  properties: {
+    description: 'AI Foundry project'
+  }
+}
+```
+
+### How We Found the Solution
+1. **Exported working resource from Portal**: `az resource show --ids <resource-id> -o json`
+2. **Compared Portal deployment vs Bicep**: Found `kind: 'AIServices'` and `allowProjectManagement: true`
+3. **Checked API version errors**: Error messages revealed supported versions
+4. **Iterative deployment with versioned resource groups**: `rg-ailz-demo-v2`, `v3`, `v4`... `v8` (finally succeeded!)
+
+### Deployment Strategy: Versioned Resource Groups
+**Pro tip from this experience:**
+- Increment version on each attempt: `rg-ailz-demo-v2`, `v3`, `v4`...
+- Allows comparison of partially deployed resources
+- No need to wait for deletions
+- Clean up old versions in batch: `az group delete --name rg-ailz-demo-v2 --yes --no-wait`
+
+### Impact
+- 8 deployment iterations to get AI Foundry working
+- Errors were cryptic and didn't point to root cause
+- Azure Portal successfully creates resources that Bicep templates cannot (different validation)
+- Exporting ARM/JSON from Portal and comparing revealed missing properties
+
+### Recommendations
+1. **Export working Portal deployments** to discover undocumented requirements
+2. **Use latest API versions** for new Azure services (2025-xx-xx vs 2024-xx-xx)
+3. **Enable managed identity** on both parent and child resources
+4. **Version your resource groups** during iterative troubleshooting (`-v1`, `-v2`, `-v3`...)
+5. **Don't trust documentation** for preview services - validate with Portal deployments
+
+---
+
+## 2. Cosmos DB Free Tier Limitations (November 17, 2025) 🆕
+
+### Issue
+Cosmos DB deployment failed with:
+```
+Free tier is not supported for Internal subscriptions.
+```
+
+### Root Cause
+Microsoft internal subscriptions (employee subscriptions) do not support Cosmos DB free tier, even though it's available for customer subscriptions.
+
+### Solution
+Make free tier optional in Bicep:
+```bicep
+@description('Enable Cosmos DB free tier (not available for Microsoft internal subscriptions)')
+param enableFreeTier bool = true
+
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
+  properties: {
+    enableFreeTier: enableFreeTier  // Parameterized
+    databaseAccountOfferType: 'Standard'
+    // ... other properties
+  }
+}
+```
+
+In parameters file for internal subscription:
+```bicep
+param enableCosmosFreeTier = false
+```
+
+### Impact
+- First deployment failed due to hardcoded `enableFreeTier: true`
+- Cost: Free tier saves ~$24/month (first 1000 RU/s and 25 GB free)
+- With free tier disabled: Pay-as-you-go serverless pricing applies
+
+### Recommendations
+1. **Parameterize subscription-specific features** like free tiers
+2. **Test deployments in both customer and internal subscriptions** if applicable
+3. **Document subscription requirements** in README
+4. **Consider costs** when free tier unavailable (~$0.08/RU/s/hour serverless)
+
+---
+
+## 3. Hub-Spoke Architecture and Multi-Environment Deployments 🆕
+
+### Pattern Established
+Separated connectivity (Hub) from application platform (Landing Zone):
+
+```
+Hub (rg-connectivity-hub)           Demo LZ (rg-ailz-demo-v8)
+├── VPN Gateway (shared)            ├── VNet: 10.2.0.0/16
+├── DNS Resolver (shared)           ├── Container Apps Environment
+└── Hub VNet: 10.1.0.0/16          ├── Cosmos DB (serverless, no free tier)
+         │                          ├── Storage Account
+         │                          ├── Key Vault
+         └──── VNet Peering ───────>└── AI Services
+                                    
+Lab LZ (rg-ailz-lab) - UNTOUCHED
+├── VNet: 10.0.0.0/16
+├── Container Apps Environment
+├── Cosmos DB (serverless, free tier)
+└── All apps deployed
+```
+
+### Key Design Decisions
+1. **Parameterized resource group names**: Changed from hardcoded `rg-ailz-lab` to parameter
+   ```bicep
+   @description('Resource group name for landing zone resources')
+   param resourceGroupName string = 'rg-ailz-lab'
+   ```
+
+2. **Non-overlapping IP spaces**: Lab uses 10.0.0.0/16, Demo uses 10.2.0.0/16
+
+3. **Unique suffixes**: Lab uses `ezle7syi`, Demo uses `demo08` to avoid naming conflicts
+
+4. **Shared Hub infrastructure**: One VPN Gateway and DNS Resolver serve all landing zones via peering
+
+### Private DNS Zone Architecture
+Each landing zone's Bicep modules create private DNS zones (not centralized):
+- `modules/cosmosdb.bicep` creates `privatelink.documents.azure.com`
+- `modules/storage.bicep` creates `privatelink.blob.core.windows.net`
+- `modules/keyvault.bicep` creates `privatelink.vaultcore.azure.net`
+- `modules/cognitiveServicesPrivateDns.bicep` creates AI service zones
+- Each zone auto-links to the landing zone's VNet
+
+**Why this works:**
+- Container Apps resolve private endpoints within same VNet ✅
+- VPN clients query Hub DNS Resolver → forwards to landing zone private DNS zones ✅
+- No manual DNS zone management needed
+- Each environment isolated yet accessible via Hub
+
+### Multi-Environment Strategy
+- **Lab environment**: Production workloads, stable
+- **Demo environment**: Testing infrastructure changes, ephemeral
+- **Incremental versioning**: `rg-ailz-demo-v2`, `v3`... delete old versions when done
+- **Zero impact migrations**: Deploy new, test, migrate apps, delete old
+
+---
+
+## 4. Container Apps Internal Ingress - Critical Gotcha! ⚠️
 
 ### Issue
 **Container Apps in an internal environment have confusing `external` property behavior:**

@@ -33,18 +33,6 @@ param containerAppsSubnetPrefix string = '10.0.0.0/23'
 @description('Private endpoints subnet address prefix')
 param privateEndpointSubnetPrefix string = '10.0.2.0/24'
 
-@description('Gateway subnet address prefix (for VPN Gateway)')
-param gatewaySubnetPrefix string = '10.0.3.0/27'
-
-@description('DNS Resolver subnet address prefix (for Private DNS Resolver)')
-param dnsResolverSubnetPrefix string = '10.0.4.0/28'
-
-@description('Deploy VPN Gateway for secure developer access')
-param deployVpnGateway bool = true
-
-@description('VPN client address pool for P2S connections')
-param vpnClientAddressPool string = '172.16.201.0/24'
-
 @description('Deploy AI Foundry and AI services')
 param deployAiServices bool = true
 
@@ -57,15 +45,48 @@ param deployDocumentTranslator bool = true
 @description('Deploy AI Search service for Finlex ingestion')
 param deployAiSearch bool = false
 
+@description('Enable Cosmos DB free tier (one per subscription, not available for Microsoft internal subscriptions)')
+param enableCosmosFreeTier bool = true
+
 @description('Deployment timestamp')
 param deploymentTimestamp string = utcNow('yyyy-MM-dd')
+
+@description('Resource group name for landing zone resources')
+param resourceGroupName string = 'rg-ailz-lab'
+
+@description('Environment name for tagging')
+param environmentName string = 'lab'
+
+// ============================================================================
+// HUB CONNECTIVITY (Optional - for VNet Peering)
+// ============================================================================
+
+@description('Enable VNet peering to Hub (requires existing Hub VNet with VPN Gateway)')
+param enableHubPeering bool = true
+
+@description('Hub VNet resource ID (required if enableHubPeering is true)')
+param hubVnetId string = ''
+
+@description('Hub resource group name (required for bidirectional peering)')
+param hubResourceGroupName string = ''
+
+@description('Hub VNet name (required for bidirectional peering)')
+param hubVnetName string = ''
+
+@description('Hub DNS Resolver IP address (typically 10.1.1.4)')
+param hubDnsResolverIp string = '10.1.1.4'
+
+// ============================================================================
+// CONTAINER REGISTRY
+// ============================================================================
+
+@description('Enable public network access for ACR (Enabled for dev/build, Disabled for production)')
+@allowed(['Enabled', 'Disabled'])
+param acrPublicNetworkAccess string = 'Disabled'
 
 // ============================================================================
 // VARIABLES
 // ============================================================================
-
-var resourceGroupName = 'rg-ailz-lab'
-var environmentName = 'lab'
 
 // Common tags applied to all resources
 var commonTags = {
@@ -103,10 +124,6 @@ module monitoring 'modules/monitoring.bicep' = {
 }
 
 // Networking (VNet, Subnets, NSGs)
-// NOTE: VNet DNS servers should be configured AFTER DNS Resolver deployment
-// to enable automatic DNS resolution for VPN clients. This creates a circular
-// dependency (VNet needed before DNS Resolver, but DNS Resolver IP needed for VNet DNS).
-// Solution: Deploy infrastructure, then run post-deployment script to update VNet DNS.
 module network 'modules/network.bicep' = {
   scope: rg
   name: 'network-deployment'
@@ -115,25 +132,52 @@ module network 'modules/network.bicep' = {
     vnetAddressPrefix: vnetAddressPrefix
     containerAppsSubnetPrefix: containerAppsSubnetPrefix
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
-    gatewaySubnetPrefix: deployVpnGateway ? gatewaySubnetPrefix : ''
-    dnsResolverSubnetPrefix: dnsResolverSubnetPrefix
-    // dnsServers: [] // TODO: After DNS Resolver deployment, update to [dnsResolver.outputs.inboundEndpointIp]
+    // VPN Gateway and DNS Resolver are deployed in Hub (hub.bicep), not in Landing Zone
+    gatewaySubnetPrefix: ''
+    dnsResolverSubnetPrefix: ''
+    // DNS servers configured to Hub DNS Resolver if peering is enabled
+    dnsServers: enableHubPeering ? [hubDnsResolverIp] : []
     tags: commonTags
   }
 }
 
-// VPN Gateway (optional, for developer access with Azure AD auth)
-module vpnGateway 'modules/vpnGateway.bicep' = if (deployVpnGateway) {
+// ============================================================================
+// HUB CONNECTIVITY - VNet Peering (if enabled)
+// ============================================================================
+
+// VNet Peering: Landing Zone to Hub
+module vnetPeeringToHub 'modules/vnetPeering.bicep' = if (enableHubPeering && !empty(hubVnetId)) {
   scope: rg
-  name: 'vpngateway-deployment'
+  name: 'vnetPeering-lz-to-hub'
   params: {
-    location: location
-    vnetId: network.outputs.vnetId
-    uniqueSuffix: uniqueSuffix
-    tenantId: tenant().tenantId
-    vpnClientAddressPool: vpnClientAddressPool
-    tags: commonTags
+    localVnetName: network.outputs.vnetName
+    remoteVnetId: hubVnetId
+    peeringName: '${environmentName}-to-hub'
+    allowForwardedTraffic: true
+    allowVnetAccess: true
+    useRemoteGateways: true
   }
+  dependsOn: [
+    network
+  ]
+}
+
+// VNet Peering: Hub to Landing Zone (requires deployment in Hub RG)
+module vnetPeeringFromHub 'modules/vnetPeering.bicep' = if (enableHubPeering && !empty(hubVnetId) && !empty(hubResourceGroupName) && !empty(hubVnetName)) {
+  scope: resourceGroup(hubResourceGroupName)
+  name: 'vnetPeering-hub-to-${environmentName}'
+  params: {
+    localVnetName: hubVnetName
+    remoteVnetId: network.outputs.vnetId
+    peeringName: 'hub-to-${environmentName}'
+    allowForwardedTraffic: true
+    allowVnetAccess: true
+    useRemoteGateways: false
+    allowGatewayTransit: true
+  }
+  dependsOn: [
+    network
+  ]
 }
 
 // Key Vault
@@ -174,6 +218,7 @@ module cosmosDb 'modules/cosmosdb.bicep' = {
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     vnetId: network.outputs.vnetId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    enableFreeTier: enableCosmosFreeTier
     tags: commonTags
   }
 }
@@ -286,24 +331,9 @@ module containerRegistry 'modules/containerRegistry.bicep' = {
     vnetId: network.outputs.vnetId
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    publicNetworkAccess: acrPublicNetworkAccess
     tags: commonTags
   }
-}
-
-// DNS Private Resolver (for VPN clients to resolve Private DNS zones)
-module dnsResolver 'modules/dnsResolver.bicep' = {
-  scope: rg
-  name: 'dnsResolver-deployment'
-  params: {
-    location: location
-    uniqueSuffix: uniqueSuffix
-    vnetId: network.outputs.vnetId
-    dnsResolverSubnetId: network.outputs.dnsResolverSubnetId
-    tags: commonTags
-  }
-  dependsOn: [
-    containerAppsPrivateDns
-  ]
 }
 
 // ============================================================================
@@ -350,16 +380,15 @@ output applicationInsightsInstrumentationKey string = monitoring.outputs.applica
 // Configuration outputs
 output entraIdTenantId string = entraIdTenantId
 
-// DNS Resolver outputs
-output dnsResolverInboundIp string = dnsResolver.outputs.inboundEndpointIp
-output dnsResolverName string = dnsResolver.outputs.dnsResolverName
-output dnsResolverSetupInstructions string = dnsResolver.outputs.setupInstructions
+// Hub connectivity outputs
+output hubPeeringEnabled bool = enableHubPeering
+output hubVnetId string = enableHubPeering ? hubVnetId : ''
+output hubDnsResolverIp string = enableHubPeering ? hubDnsResolverIp : ''
+output peeringToHubState string = (enableHubPeering && !empty(hubVnetId)) ? vnetPeeringToHub.outputs.peeringState : 'Not configured'
+output peeringFromHubState string = (enableHubPeering && !empty(hubVnetId) && !empty(hubResourceGroupName)) ? vnetPeeringFromHub.outputs.peeringState : 'Not configured'
 
-// VPN Gateway outputs (if deployed)
-output vpnGatewayDeployed bool = deployVpnGateway
-output vpnGatewayName string = deployVpnGateway ? vpnGateway!.outputs.vpnGatewayName : 'Not deployed'
-output vpnGatewayPublicIp string = deployVpnGateway ? vpnGateway!.outputs.publicIpAddress : 'Not deployed'
-output vpnSetupInstructions string = deployVpnGateway ? vpnGateway!.outputs.setupInstructions : 'VPN Gateway not deployed. Set deployVpnGateway=true to enable.'
+// NOTE: VPN Gateway and DNS Resolver outputs are in Hub deployment (hub.bicep)
+// These resources are shared across all landing zones via VNet peering
 
 // AI Services outputs (if deployed)
 output aiServicesDeployed bool = deployAiServices
