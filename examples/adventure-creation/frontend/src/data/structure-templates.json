@@ -1,0 +1,520 @@
+[
+  {
+    "id": "empty",
+    "name": "Empty Canvas",
+    "description": "Start with a blank canvas",
+    "totalDuration": 0,
+    "encounters": [],
+    "connections": []
+  },
+  {
+    "id": "rescue-mission",
+    "name": "The Rescue Mission",
+    "description": "A quick linear rescue: Cinematic intro → Social negotiation → Tactical combat",
+    "totalDuration": 50,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "The Kidnapping",
+        "description": "A trusted ally has been taken. The kidnappers left a cryptic message.",
+        "position": { "x": 200, "y": 300 }
+      },
+      {
+        "type": "social",
+        "title": "Gathering Intel",
+        "description": "Question witnesses, gather clues, and learn the kidnappers' location.",
+        "position": { "x": 500, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "The Rescue",
+        "description": "Storm the hideout and free the captive before it's too late.",
+        "position": { "x": 800, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 }
+    ]
+  },
+  {
+    "id": "heist",
+    "name": "The Heist",
+    "description": "Classic heist structure: Planning → Infiltration → Complications → Escape",
+    "totalDuration": 105,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "The Job Offer",
+        "description": "A mysterious patron offers a lucrative but dangerous job.",
+        "position": { "x": 200, "y": 300 }
+      },
+      {
+        "type": "social",
+        "title": "Assemble the Crew",
+        "description": "Recruit specialists and gather the tools needed for the job.",
+        "position": { "x": 500, "y": 300 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "area-exploration",
+        "title": "Case the Joint",
+        "description": "Scout the target location, identify guards, cameras, and weak points.",
+        "position": { "x": 800, "y": 300 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "The Infiltration",
+        "description": "Sneak past security systems and reach the vault undetected.",
+        "durationMinutes": 30,
+        "position": { "x": 1100, "y": 200 }
+      },
+      {
+        "type": "tactical",
+        "title": "Guards Alerted!",
+        "description": "Something went wrong. Fight through security forces.",
+        "position": { "x": 1100, "y": 400 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "chase",
+        "title": "The Escape",
+        "description": "Get away with the prize before reinforcements arrive.",
+        "position": { "x": 1400, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 2, "to": 3 },
+      { "from": 2, "to": 4 },
+      { "from": 3, "to": 5 },
+      { "from": 4, "to": 5 }
+    ]
+  },
+  {
+    "id": "mystery",
+    "name": "The Mystery",
+    "description": "Investigation and deduction: Crime scene → Witness interviews → Clue discovery → Confrontation",
+    "totalDuration": 120,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "The Crime",
+        "description": "A body is discovered under mysterious circumstances.",
+        "position": { "x": 200, "y": 300 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "investigation",
+        "title": "Examine the Scene",
+        "description": "Search for physical evidence, examine the body, document everything.",
+        "position": { "x": 500, "y": 300 }
+      },
+      {
+        "type": "social",
+        "title": "Question Witnesses",
+        "description": "Interview bystanders, suspects, and anyone with information.",
+        "position": { "x": 800, "y": 200 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "investigation",
+        "title": "Follow the Trail",
+        "description": "Track down leads, search secondary locations, gather more evidence.",
+        "position": { "x": 800, "y": 400 }
+      },
+      {
+        "type": "social",
+        "title": "Connect the Dots",
+        "description": "Confront suspects with evidence and narrow down the culprit.",
+        "position": { "x": 1100, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "Apprehend the Culprit",
+        "description": "The killer makes a desperate stand when cornered.",
+        "position": { "x": 1400, "y": 300 }
+      },
+      {
+        "type": "cinematic",
+        "title": "The Revelation",
+        "description": "The truth is revealed and justice is served.",
+        "position": { "x": 1700, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 1, "to": 3 },
+      { "from": 2, "to": 4 },
+      { "from": 3, "to": 4 },
+      { "from": 4, "to": 5 },
+      { "from": 5, "to": 6 }
+    ]
+  },
+  {
+    "id": "journey",
+    "name": "The Hero's Journey",
+    "description": "Epic quest structure: Call to adventure → Trials → Ordeal → Return",
+    "totalDuration": 180,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "Ordinary World",
+        "description": "Life is peaceful but something is about to change everything.",
+        "position": { "x": 200, "y": 400 }
+      },
+      {
+        "type": "social",
+        "title": "Call to Adventure",
+        "description": "A messenger arrives with news of a great quest.",
+        "position": { "x": 500, "y": 400 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "journey",
+        "title": "Crossing the Threshold",
+        "description": "Leave the familiar world behind and enter the realm of adventure.",
+        "position": { "x": 800, "y": 400 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "area-exploration",
+        "title": "Tests and Allies",
+        "description": "Explore strange lands, prove your worth, and find companions.",
+        "position": { "x": 1100, "y": 200 }
+      },
+      {
+        "type": "tactical",
+        "title": "Guardian Battle",
+        "description": "Face the guardian that protects the path forward.",
+        "position": { "x": 1100, "y": 400 }
+      },
+      {
+        "type": "social",
+        "title": "Meeting the Mentor",
+        "description": "A wise figure shares crucial knowledge and guidance.",
+        "position": { "x": 1100, "y": 600 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "Approach to the Cave",
+        "description": "Navigate the treacherous approach to the final challenge.",
+        "position": { "x": 1400, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "The Ordeal",
+        "description": "Face the greatest challenge and overcome impossible odds.",
+        "durationMinutes": 45,
+        "position": { "x": 1700, "y": 300 }
+      },
+      {
+        "type": "cinematic",
+        "title": "Seizing the Reward",
+        "description": "Claim the prize: treasure, knowledge, or power.",
+        "position": { "x": 2000, "y": 300 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "chase",
+        "title": "The Road Back",
+        "description": "Escape with the prize as enemies pursue.",
+        "position": { "x": 2300, "y": 300 }
+      },
+      {
+        "type": "cinematic",
+        "title": "Return with Wisdom",
+        "description": "Return home transformed, bearing gifts for your people.",
+        "position": { "x": 2600, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 2, "to": 3 },
+      { "from": 2, "to": 4 },
+      { "from": 2, "to": 5 },
+      { "from": 3, "to": 6 },
+      { "from": 4, "to": 6 },
+      { "from": 5, "to": 6 },
+      { "from": 6, "to": 7 },
+      { "from": 7, "to": 8 },
+      { "from": 8, "to": 9 },
+      { "from": 9, "to": 10 }
+    ]
+  },
+  {
+    "id": "siege",
+    "name": "The Siege",
+    "description": "Defend against waves: Preparation → Multiple tactical encounters → Final stand",
+    "totalDuration": 165,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "Enemy Approaches",
+        "description": "Scouts report a massive army marching toward the fortress.",
+        "position": { "x": 200, "y": 400 }
+      },
+      {
+        "type": "social",
+        "title": "Rally the Defenders",
+        "description": "Inspire the garrison, assign positions, and prepare for battle.",
+        "position": { "x": 500, "y": 400 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "area-exploration",
+        "title": "Fortify Defenses",
+        "description": "Identify weak points, reinforce walls, set traps and ambushes.",
+        "position": { "x": 800, "y": 400 }
+      },
+      {
+        "type": "tactical",
+        "title": "First Wave",
+        "description": "The enemy tests the defenses with an initial assault.",
+        "position": { "x": 1100, "y": 200 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "Sabotage Mission",
+        "description": "Sneak out and sabotage enemy siege equipment.",
+        "position": { "x": 1100, "y": 400 }
+      },
+      {
+        "type": "tactical",
+        "title": "Second Wave",
+        "description": "A more coordinated assault with siege towers and rams.",
+        "position": { "x": 1400, "y": 200 }
+      },
+      {
+        "type": "social",
+        "title": "Reinforcements Arrive",
+        "description": "Allied forces appear on the horizon just when hope seems lost.",
+        "position": { "x": 1400, "y": 400 }
+      },
+      {
+        "type": "tactical",
+        "title": "Final Assault",
+        "description": "The enemy commits everything in a desperate final push.",
+        "durationMinutes": 45,
+        "position": { "x": 1700, "y": 300 }
+      },
+      {
+        "type": "cinematic",
+        "title": "Victory or Defeat",
+        "description": "The siege ends and the survivors count the cost.",
+        "position": { "x": 2000, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 2, "to": 3 },
+      { "from": 2, "to": 4 },
+      { "from": 3, "to": 5 },
+      { "from": 4, "to": 5 },
+      { "from": 3, "to": 6 },
+      { "from": 5, "to": 7 },
+      { "from": 6, "to": 7 },
+      { "from": 7, "to": 8 }
+    ]
+  },
+  {
+    "id": "tower-takeover",
+    "name": "Tower Takeover",
+    "description": "Inspired by Die Hard: Hostage situation in high-rise building",
+    "totalDuration": 135,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "The Party Crashers",
+        "description": "Armed intruders seize control during a grand celebration.",
+        "position": { "x": 200, "y": 300 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "Slip Away Unnoticed",
+        "description": "Evade capture and find a hiding spot to plan your next move.",
+        "position": { "x": 500, "y": 300 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "area-exploration",
+        "title": "Scout the Building",
+        "description": "Learn the layout, find weapons, and identify the intruders' plan.",
+        "position": { "x": 800, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "First Contact",
+        "description": "Take down isolated guards and acquire better equipment.",
+        "position": { "x": 1100, "y": 200 }
+      },
+      {
+        "type": "social",
+        "title": "Call for Help",
+        "description": "Make contact with authorities and warn them of the true threat.",
+        "position": { "x": 1100, "y": 400 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "Sabotage Operations",
+        "description": "Disrupt the intruders' plan by destroying key equipment.",
+        "position": { "x": 1400, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "Rooftop Showdown",
+        "description": "Face the leader and their elite guards in a desperate final battle.",
+        "durationMinutes": 45,
+        "position": { "x": 1700, "y": 300 }
+      },
+      {
+        "type": "cinematic",
+        "title": "Aftermath",
+        "description": "Survivors are freed and the building is secured.",
+        "position": { "x": 2000, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 2, "to": 3 },
+      { "from": 2, "to": 4 },
+      { "from": 3, "to": 5 },
+      { "from": 4, "to": 5 },
+      { "from": 5, "to": 6 },
+      { "from": 6, "to": 7 }
+    ]
+  },
+  {
+    "id": "snake-cult",
+    "name": "Just Another Snake Cult",
+    "description": "Inspired by Conan: Ancient cult, dark sorcery, and climactic tower ascent",
+    "totalDuration": 120,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "The Enslaved",
+        "description": "A mysterious cult has been kidnapping villagers for dark rituals.",
+        "position": { "x": 200, "y": 300 }
+      },
+      {
+        "type": "social",
+        "title": "Infiltrate the Cult",
+        "description": "Pose as initiates to gain access to the inner sanctum.",
+        "position": { "x": 500, "y": 300 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "investigation",
+        "title": "Uncover the Plot",
+        "description": "Learn of the ancient evil they seek to awaken.",
+        "position": { "x": 800, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "Dungeon Guards",
+        "description": "Fight through cultists to reach the prisoners.",
+        "position": { "x": 1100, "y": 300 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "Ascend the Tower",
+        "description": "Climb the serpent tower while avoiding traps and sentries.",
+        "position": { "x": 1400, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "The High Priest",
+        "description": "Confront the cult leader and their summoned serpent god.",
+        "durationMinutes": 45,
+        "position": { "x": 1700, "y": 300 }
+      },
+      {
+        "type": "cinematic",
+        "title": "The Temple Falls",
+        "description": "The dark temple crumbles as the evil is vanquished.",
+        "position": { "x": 2000, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 2, "to": 3 },
+      { "from": 3, "to": 4 },
+      { "from": 4, "to": 5 },
+      { "from": 5, "to": 6 }
+    ]
+  },
+  {
+    "id": "prison-break",
+    "name": "The Prison Break",
+    "description": "Inspired by Shawshank/Alcatraz: Elaborate escape from maximum security",
+    "totalDuration": 105,
+    "encounters": [
+      {
+        "type": "cinematic",
+        "title": "Wrongfully Convicted",
+        "description": "Sentenced to an inescapable fortress prison for a crime you didn't commit.",
+        "position": { "x": 200, "y": 300 }
+      },
+      {
+        "type": "social",
+        "title": "Earn Trust",
+        "description": "Navigate prison politics and recruit allies for the escape.",
+        "position": { "x": 500, "y": 300 }
+      },
+      {
+        "type": "discovery",
+        "subtype": "investigation",
+        "title": "Study the Routine",
+        "description": "Learn guard patterns, identify weaknesses, and gather intelligence.",
+        "position": { "x": 800, "y": 300 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "infiltration",
+        "title": "The Tunnel",
+        "description": "Secretly dig an escape route over weeks, avoiding discovery.",
+        "position": { "x": 1100, "y": 300 }
+      },
+      {
+        "type": "tactical",
+        "title": "The Riot",
+        "description": "Stage a distraction while the escape team makes their move.",
+        "position": { "x": 1400, "y": 200 }
+      },
+      {
+        "type": "action-sequence",
+        "subtype": "chase",
+        "title": "The Escape",
+        "description": "Race through tunnels and over walls before the alarm is raised.",
+        "position": { "x": 1400, "y": 400 }
+      },
+      {
+        "type": "cinematic",
+        "title": "Freedom",
+        "description": "Finally free, but with guards still searching everywhere.",
+        "position": { "x": 1700, "y": 300 }
+      }
+    ],
+    "connections": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2 },
+      { "from": 2, "to": 3 },
+      { "from": 3, "to": 4 },
+      { "from": 3, "to": 5 },
+      { "from": 4, "to": 6 },
+      { "from": 5, "to": 6 }
+    ]
+  }
+]
