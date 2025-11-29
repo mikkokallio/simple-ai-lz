@@ -41,11 +41,11 @@ var privateEndpointName = 'pe-aif-ailz-${uniqueSuffix}'
 // AI FOUNDRY RESOURCE (PARENT)
 // ============================================================================
 
-resource aiFoundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+resource aiFoundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: aiFoundryName
   location: location
   tags: tags
-  kind: 'AIFoundry'
+  kind: 'AIServices'
   sku: {
     name: 'S0'
   }
@@ -60,6 +60,7 @@ resource aiFoundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
     }
     disableLocalAuth: true // Enforce managed identity only
     restrictOutboundNetworkAccess: false
+    allowProjectManagement: true // Required to create AI Foundry projects
   }
 }
 
@@ -67,11 +68,14 @@ resource aiFoundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 // AI FOUNDRY PROJECT (CHILD)
 // ============================================================================
 
-resource aiFoundryProject 'Microsoft.CognitiveServices/accounts/projects@2024-10-01' = {
+resource aiFoundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: aiFoundry
   name: aiFoundryProjectName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     description: 'AI Foundry project for AI Landing Zone'
   }

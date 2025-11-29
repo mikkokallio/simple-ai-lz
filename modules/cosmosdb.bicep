@@ -23,6 +23,9 @@ param logAnalyticsWorkspaceId string
 @description('Resource tags')
 param tags object
 
+@description('Enable Cosmos DB free tier (one per subscription)')
+param enableFreeTier bool = true
+
 // ============================================================================
 // VARIABLES
 // ============================================================================
@@ -40,7 +43,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   kind: 'GlobalDocumentDB'
   properties: {
     databaseAccountOfferType: 'Standard'
-    enableFreeTier: true  // FREE TIER: First 1000 RU/s and 25 GB free!
+    enableFreeTier: enableFreeTier  // FREE TIER: First 1000 RU/s and 25 GB free (one per subscription)
     enableAutomaticFailover: false
     enableMultipleWriteLocations: false
     consistencyPolicy: {

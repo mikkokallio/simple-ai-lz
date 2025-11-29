@@ -26,6 +26,9 @@ param logAnalyticsWorkspaceId string
 @description('ACR SKU - Basic, Standard, or Premium (Premium required for private endpoints)')
 param sku string = 'Premium'
 
+@description('Enable public network access (Enabled or Disabled). Use Enabled for development, Disabled for production.')
+param publicNetworkAccess string = 'Disabled'
+
 // ============================================================================
 // VARIABLES
 // ============================================================================
@@ -50,7 +53,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   }
   properties: {
     adminUserEnabled: true // Enable for easier initial setup
-    publicNetworkAccess: 'Disabled' // Private endpoint only
+    publicNetworkAccess: publicNetworkAccess // Controlled via parameter
     networkRuleBypassOptions: 'AzureServices'
     zoneRedundancy: 'Disabled' // Single zone for cost optimization
     dataEndpointEnabled: false

@@ -22,6 +22,9 @@ param allowVnetAccess bool = true
 @description('Use remote VNet gateway (Hub VPN Gateway)')
 param useRemoteGateways bool = true
 
+@description('Allow gateway transit (required on Hub side for spoke to use gateway)')
+param allowGatewayTransit bool = false
+
 // ============================================================================
 // VNET PEERING
 // ============================================================================
@@ -36,6 +39,7 @@ resource peering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-
   properties: {
     allowVirtualNetworkAccess: allowVnetAccess
     allowForwardedTraffic: allowForwardedTraffic
+    allowGatewayTransit: allowGatewayTransit
     useRemoteGateways: useRemoteGateways
     remoteVirtualNetwork: {
       id: remoteVnetId
