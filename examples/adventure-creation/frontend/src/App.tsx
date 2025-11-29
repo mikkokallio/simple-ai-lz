@@ -1,10 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useAdventure } from '@/hooks/useAdventure'
 import { Adventure, Stage } from '@/types/adventure'
+import { adventureAPI } from '@/lib/api'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Toaster } from '@/components/ui/sonner'
-import { Sparkle, Scroll, Buildings, Sword, Users, Gift, Play, MapPin, Cpu } from '@phosphor-icons/react'
+import { Sparkle, Scroll, Buildings, Sword, Users, Gift, Play, MapPin, Cpu, Crown } from '@phosphor-icons/react'
+import { useAuth } from '@/contexts/AuthContext'
+import LoginScreen from '@/components/LoginScreen'
+import PendingUserScreen from '@/components/PendingUserScreen'
 import AICompanion from '@/components/AICompanion'
 import OverviewStage from '@/components/stages/OverviewStage'
 import StructureStage from '@/components/stages/StructureStage'
@@ -14,6 +18,7 @@ import NPCsStage from '@/components/stages/NPCsStage'
 import RewardsStage from '@/components/stages/RewardsStage'
 import StatBuilderStage from '@/components/stages/StatBuilderStage'
 import GMMode from '@/components/stages/GMMode'
+import AdminView from '@/components/stages/AdminView'
 import { motion, AnimatePresence } from 'framer-motion'
 import ParticleEffect from '@/components/ParticleEffect'
 
@@ -23,12 +28,55 @@ const STAGE_INFO = {
   encounters: { label: 'Encounters', icon: Sword, color: 'text-orange-400' },
   npcs: { label: 'NPCs', icon: Users, color: 'text-accent' },
   'gm-mode': { label: 'GM Mode', icon: Play, color: 'text-primary' },
+  'admin': { label: 'Admin', icon: Crown, color: 'text-destructive' },
 }
 
 function App() {
-  const [adventure, setAdventure] = useAdventure<Adventure | null>('current-adventure', null)
-
+  const { user, isAuthenticated, isLoading: authLoading, refreshUser } = useAuth()
+  const [adventure, setAdventure, isLoading, loadAdventure] = useAdventure<Adventure | null>('current-adventure', null)
+  const [showStartScreen, setShowStartScreen] = useState(true)
+  const [savedAdventures, setSavedAdventures] = useState<Adventure[]>([])
   const [isAICollapsed, setIsAICollapsed] = useState(true)
+  
+  // Check if user is admin
+  const isAdmin = user?.role === 'admin'
+
+  // Load saved adventures list on mount - MUST be before any conditional returns
+  useEffect(() => {
+    async function loadSavedAdventures() {
+      try {
+        const adventures = await adventureAPI.list()
+        setSavedAdventures(adventures)
+      } catch (error) {
+        console.error('Failed to load adventures:', error)
+      }
+    }
+    if (!isLoading && isAuthenticated && user?.role !== 'pending') {
+      loadSavedAdventures()
+    }
+  }, [isLoading, isAuthenticated, user?.role])
+
+  // Show loading screen while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <Sparkle className="w-16 h-16 text-primary animate-pulse mx-auto mb-4" weight="duotone" />
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Show login screen if not authenticated
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={refreshUser} />
+  }
+
+  // Show pending screen if user role is pending
+  if (user?.role === 'pending') {
+    return <PendingUserScreen user={user} />
+  }
 
   const createNewAdventure = () => {
     const newAdventure: Adventure = {
@@ -39,7 +87,7 @@ function App() {
         pitch: '',
         themes: [],
         gmNotes: '',
-        partyLevelAverage: 3,
+        partyLevelAverage: 1,
         playerCount: 4,
         coreConflict: '',
         antagonistIds: [],
@@ -63,16 +111,51 @@ function App() {
       updatedAt: Date.now(),
     }
     setAdventure(newAdventure)
+    setShowStartScreen(false)
+  }
+
+  const continueAdventure = () => {
+    setShowStartScreen(false)
+  }
+
+  const loadExistingAdventure = async (id: string) => {
+    await loadAdventure(id)
+    setShowStartScreen(false)
   }
 
   const updateAdventure = (updates: Partial<Adventure>) => {
     setAdventure((current: Adventure | null) => {
       if (!current) return null
-      return {
+      
+      // Ensure structure always exists to prevent crashes
+      const updatedAdventure = {
         ...current,
         ...updates,
         updatedAt: Date.now(),
       }
+      
+      // Ensure critical nested objects have defaults
+      if (!updatedAdventure.overview) {
+        updatedAdventure.overview = {
+          pitch: '',
+          themes: [],
+          gmNotes: '',
+          partyLevelAverage: 1,
+          playerCount: 4,
+          coreConflict: '',
+          antagonistIds: [],
+          antagonistGoals: '',
+        }
+      }
+      
+      if (!updatedAdventure.structure) {
+        updatedAdventure.structure = {
+          encounters: [],
+          connections: [],
+        }
+      }
+      
+      return updatedAdventure
     })
   }
 
@@ -107,12 +190,16 @@ function App() {
         return <StatBuilderStage adventure={adventure} updateAdventure={updateAdventure} />
       case 'gm-mode':
         return <GMMode adventure={adventure} updateAdventure={updateAdventure} />
+      case 'admin':
+        return isAdmin ? <AdminView adventure={adventure} updateAdventure={updateAdventure} /> : null
       default:
         return null
     }
   }
 
-  if (!adventure) {
+  if (!adventure || showStartScreen) {
+    const hasAdventures = adventure !== null || savedAdventures.length > 0
+
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="max-w-2xl mx-auto px-6 text-center">
@@ -124,15 +211,53 @@ function App() {
               <p className="text-lg text-muted-foreground mb-8 font-normal tracking-normal">
                 Create immersive D&D adventures with AI assistance. Start from scratch and let the AI guide you through every step.
               </p>
-              <Button 
-                variant="default"
-                size="lg" 
-                className="gap-2"
-                onClick={createNewAdventure}
-              >
-                <Sparkle weight="fill" />
-                Begin Your Adventure
-              </Button>
+              
+              <div className="flex flex-col gap-3 max-w-md mx-auto">
+                {adventure && (
+                  <Button 
+                    variant="default"
+                    size="lg" 
+                    className="gap-2 w-full"
+                    onClick={continueAdventure}
+                  >
+                    <Play className="w-5 h-5" weight="fill" />
+                    Continue: {adventure.name}
+                  </Button>
+                )}
+                
+                <Button 
+                  variant="secondary"
+                  size="lg" 
+                  className="gap-2 w-full"
+                  onClick={createNewAdventure}
+                >
+                  <Sparkle weight="fill" />
+                  New Adventure
+                </Button>
+                
+                {savedAdventures.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-sm text-muted-foreground mb-2">Load Saved Adventure:</p>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {savedAdventures.map((adv) => (
+                        <Button
+                          key={adv.id}
+                          variant="ghost"
+                          size="sm"
+                          className="w-full justify-start gap-2"
+                          onClick={() => loadExistingAdventure(adv.id)}
+                        >
+                          <Scroll className="w-4 h-4" />
+                          {adv.name}
+                          <span className="text-xs text-muted-foreground ml-auto">
+                            {new Date(adv.updatedAt).toLocaleDateString()}
+                          </span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -164,6 +289,9 @@ function App() {
           <Tabs value={adventure.stage} onValueChange={(v) => changeStage(v as Stage)}>
             <TabsList className="elegant-tabs-list w-full justify-start">
               {Object.entries(STAGE_INFO).map(([key, info]) => {
+                // Hide admin tab for non-admin users
+                if (key === 'admin' && !isAdmin) return null
+                
                 return (
                   <TabsTrigger
                     key={key}

@@ -7,6 +7,7 @@ export type Stage =
   | 'rewards'
   | 'stat-builder'
   | 'gm-mode'
+  | 'admin'
 
 export interface Adventure {
   id: string
@@ -85,7 +86,7 @@ export type EncounterType =
   | 'discovery'     // Was 'investigation'
   | 'cinematic'     // New!
 
-export type ActionSequenceType = 'chase' | 'infiltration' | 'journey' | 'survival'
+export type ActionSequenceType = 'chase' | 'contest' | 'escape' | 'infiltration' | 'journey' | 'survival'
 export type DiscoveryType = 'area-exploration' | 'investigation' | 'puzzle' | 'research'
 
 export interface EncounterAction {

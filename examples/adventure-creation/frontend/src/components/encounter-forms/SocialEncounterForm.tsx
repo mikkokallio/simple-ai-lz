@@ -74,9 +74,8 @@ export default function SocialEncounterForm({ encounter, adventure, onUpdate }: 
 
   return (
     <>
-      <Card>
-        <CardContent className="pt-6 space-y-6">
-          <CommonEncounterFields encounter={encounter} onUpdate={onUpdate} showStoryXP={true} defaultDuration={15} />
+      <div className="space-y-6">
+        <CommonEncounterFields encounter={encounter} onUpdate={onUpdate} showStoryXP={true} defaultDuration={15} />
 
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -288,8 +287,7 @@ export default function SocialEncounterForm({ encounter, adventure, onUpdate }: 
               Add NPC
             </Button>
           </div>
-        </CardContent>
-      </Card>
+      </div>
 
       <NPCSelector
         open={showNPCSelector}

@@ -279,7 +279,8 @@ export default function MonsterSelector({ open, onOpenChange, onSelect }: Monste
               </>
             )}
 
-            <ScrollArea className="flex-1 pr-4">
+            {/* FIXED HEIGHT SCROLLABLE CONTAINER - NO FLEX, FIXED HEIGHT */}
+            <div className="h-[400px] overflow-y-auto overflow-x-hidden border border-border rounded-md pr-2">
               {isLoadingList ? (
                 <div className="flex items-center justify-center py-12">
                   <div className="flex items-center gap-2">
@@ -295,7 +296,7 @@ export default function MonsterSelector({ open, onOpenChange, onSelect }: Monste
                   </div>
                 </div>
               ) : (
-                <div className="grid gap-2">
+                <div className="grid gap-2 p-2">
                   {filteredMonsters.map((monster) => (
                     <div
                       key={monster.file}
@@ -332,7 +333,7 @@ export default function MonsterSelector({ open, onOpenChange, onSelect }: Monste
                   ))}
                 </div>
               )}
-            </ScrollArea>
+            </div>
           </div>
         </div>
 

@@ -41,9 +41,8 @@ export default function DiscoveryForm({ encounter, onUpdate }: DiscoveryFormProp
   }
 
   return (
-    <Card>
-      <CardContent className="pt-6 space-y-6">
-        <CommonEncounterFields encounter={encounter} onUpdate={onUpdate} showStoryXP={true} defaultDuration={15} />
+    <div className="space-y-6">
+      <CommonEncounterFields encounter={encounter} onUpdate={onUpdate} showStoryXP={true} defaultDuration={15} />
 
         <div>
           <Label htmlFor="discovery-type">Discovery Type</Label>
@@ -135,7 +134,6 @@ export default function DiscoveryForm({ encounter, onUpdate }: DiscoveryFormProp
             Add Point of Interest
           </Button>
         </div>
-      </CardContent>
-    </Card>
+    </div>
   )
 }

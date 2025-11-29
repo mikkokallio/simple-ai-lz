@@ -49,6 +49,66 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-11-01-pr
   name: containerRegistryName
 }
 
+// Cosmos DB database
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
+  parent: cosmosAccount
+  name: cosmosDatabaseName
+  properties: {
+    resource: {
+      id: cosmosDatabaseName
+    }
+  }
+}
+
+// Cosmos DB containers
+resource adventuresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: cosmosContainerName
+  properties: {
+    resource: {
+      id: cosmosContainerName
+      partitionKey: {
+        paths: [
+          '/sessionId'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: 'users'
+  properties: {
+    resource: {
+      id: 'users'
+      partitionKey: {
+        paths: [
+          '/googleId'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+resource templatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: 'templates'
+  properties: {
+    resource: {
+      id: 'templates'
+      partitionKey: {
+        paths: [
+          '/createdBy'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
 // Backend Container App
 resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-adventure-backend-${uniqueSuffix}'

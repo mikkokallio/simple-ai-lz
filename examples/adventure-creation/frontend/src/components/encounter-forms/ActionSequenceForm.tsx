@@ -62,9 +62,8 @@ export default function ActionSequenceForm({ encounter, onUpdate }: ActionSequen
   }
 
   return (
-    <Card>
-      <CardContent className="pt-6 space-y-6">
-        <CommonEncounterFields encounter={encounter} onUpdate={onUpdate} showStoryXP={true} defaultDuration={15} />
+    <div className="space-y-6">
+      <CommonEncounterFields encounter={encounter} onUpdate={onUpdate} showStoryXP={true} defaultDuration={15} />
 
         <div>
           <Label htmlFor="action-sequence-type">Action Sequence Type</Label>
@@ -239,7 +238,6 @@ export default function ActionSequenceForm({ encounter, onUpdate }: ActionSequen
             rows={3}
           />
         </div>
-      </CardContent>
-    </Card>
+    </div>
   )
 }

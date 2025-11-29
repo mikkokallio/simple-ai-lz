@@ -1,4 +1,5 @@
 import { Adventure, NPC, Creature } from '@/types/adventure'
+import { useAuth } from '@/contexts/AuthContext'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -27,6 +28,9 @@ interface NPCsStageProps {
 }
 
 export default function NPCsStage({ adventure, updateAdventure }: NPCsStageProps) {
+  const { user } = useAuth()
+  const isPremiumOrAdmin = user?.role === 'premium' || user?.role === 'admin'
+  
   const [npcName, setNpcName] = useState('')
   const [viewingNPC, setViewingNPC] = useState<NPC | null>(null)
   const [editingField, setEditingField] = useState<{ npcId: string; field: string; value: string } | null>(null)
@@ -307,25 +311,27 @@ export default function NPCsStage({ adventure, updateAdventure }: NPCsStageProps
                             <ImageIcon />
                             Pick a Portrait
                           </Button>
-                          <Button
-                            onClick={handleGeneratePortrait}
-                            disabled={isGeneratingPortrait || !viewingNPC.appearance}
-                            size="sm"
-                            variant="default"
-                            className="gap-2"
-                          >
-                            {isGeneratingPortrait ? (
-                              <>
-                                <Sparkle className="animate-spin" weight="fill" />
-                                Generating...
-                              </>
-                            ) : (
-                              <>
-                                <Sparkle weight="fill" />
-                                Generate New Portrait
-                              </>
-                            )}
-                          </Button>
+                          {isPremiumOrAdmin && (
+                            <Button
+                              onClick={handleGeneratePortrait}
+                              disabled={isGeneratingPortrait || !viewingNPC.appearance}
+                              size="sm"
+                              variant="default"
+                              className="gap-2"
+                            >
+                              {isGeneratingPortrait ? (
+                                <>
+                                  <Sparkle className="animate-spin" weight="fill" />
+                                  Generating...
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkle weight="fill" />
+                                  Generate New Portrait
+                                </>
+                              )}
+                            </Button>
+                          )}
                         </div>
                       </div>
                       {viewingNPC.portraitUrl && (

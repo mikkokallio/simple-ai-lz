@@ -5,12 +5,13 @@ const router = Router();
 
 /**
  * GET /api/adventures
- * List all adventures for current session
+ * List all adventures for current session/user
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
     const sessionId = (req as any).sessionId;
-    const adventures = await cosmosService.listAdventures(sessionId);
+    const userId = (req.session as any)?.userId; // Get authenticated user ID if available
+    const adventures = await cosmosService.listAdventures(sessionId, userId);
     res.json(adventures);
   } catch (error) {
     console.error('List adventures error:', error);
@@ -26,8 +27,9 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const sessionId = (req as any).sessionId;
+    const userId = (req.session as any)?.userId;
     
-    const adventure = await cosmosService.getAdventure(id, sessionId);
+    const adventure = await cosmosService.getAdventure(id, sessionId, userId);
     
     if (!adventure) {
       res.status(404).json({ error: 'Adventure not found' });
@@ -40,7 +42,6 @@ router.get('/:id', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to get adventure' });
   }
 });
-
 /**
  * POST /api/adventures
  * Create a new adventure
@@ -48,12 +49,14 @@ router.get('/:id', async (req: Request, res: Response) => {
 router.post('/', async (req: Request, res: Response) => {
   try {
     const sessionId = (req as any).sessionId;
+    const userId = (req.session as any)?.userId; // Get authenticated user ID if available
     const adventureData = req.body;
     
-    // Add sessionId to adventure
+    // Add sessionId and userId to adventure
     const adventure = await cosmosService.createAdventure({
       ...adventureData,
       sessionId,
+      userId, // Associate with user if authenticated
     });
     
     res.status(201).json(adventure);
@@ -62,7 +65,6 @@ router.post('/', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to create adventure' });
   }
 });
-
 /**
  * PUT /api/adventures/:id
  * Update an adventure
@@ -71,9 +73,10 @@ router.put('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const sessionId = (req as any).sessionId;
+    const userId = (req.session as any)?.userId;
     const updates = req.body;
     
-    const adventure = await cosmosService.updateAdventure(id, sessionId, updates);
+    const adventure = await cosmosService.updateAdventure(id, sessionId, updates, userId);
     res.json(adventure);
   } catch (error) {
     console.error('Update adventure error:', error);
@@ -94,8 +97,9 @@ router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const sessionId = (req as any).sessionId;
+    const userId = (req.session as any)?.userId;
     
-    await cosmosService.deleteAdventure(id, sessionId);
+    await cosmosService.deleteAdventure(id, sessionId, userId);
     res.status(204).send();
   } catch (error) {
     console.error('Delete adventure error:', error);

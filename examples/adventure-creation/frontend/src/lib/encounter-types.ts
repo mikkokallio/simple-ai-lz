@@ -94,6 +94,8 @@ export const ENCOUNTER_TYPES: EncounterTypeInfo[] = [
 
 export const ACTION_SEQUENCE_TYPES: { value: ActionSequenceType; label: string }[] = [
   { value: 'chase', label: 'Chase' },
+  { value: 'contest', label: 'Contest' },
+  { value: 'escape', label: 'Escape' },
   { value: 'infiltration', label: 'Infiltration' },
   { value: 'journey', label: 'Journey' },
   { value: 'survival', label: 'Survival' },

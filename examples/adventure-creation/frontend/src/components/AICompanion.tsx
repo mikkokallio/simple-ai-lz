@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useAuth } from '@/contexts/AuthContext'
 import { Adventure, Encounter, NPC } from '@/types/adventure'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -145,6 +146,14 @@ interface ProposedConnection {
 }
 
 export default function AICompanion({ adventure, updateAdventure, isCollapsed, onToggle }: AICompanionProps) {
+  const { user } = useAuth()
+  const isPremiumOrAdmin = user?.role === 'premium' || user?.role === 'admin'
+  
+  // Hide for non-premium users
+  if (!isPremiumOrAdmin) {
+    return null
+  }
+  
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',

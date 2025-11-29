@@ -89,9 +89,8 @@ export default function TacticalEncounterForm({
 
   return (
     <>
-      <Card>
-        <CardContent className="pt-6 space-y-6">
-          <CommonEncounterFields 
+      <div className="space-y-6">
+        <CommonEncounterFields 
             encounter={encounter} 
             onUpdate={onUpdate} 
             showStoryXP={false} 
@@ -277,59 +276,58 @@ export default function TacticalEncounterForm({
             </div>
           </div>
 
-          {/* Encounter Budget */}
-          {typeof encounter.difficulty === 'string' && (
-            <div className="p-4 rounded-lg bg-accent/10 border border-accent/30">
-              <div className="text-sm font-semibold mb-3">Encounter Budget (D&D 2024)</div>
-              {(() => {
-                const allCRs: string[] = []
-                ;(encounter.npcs || []).forEach((npcId) => {
-                  const npc = adventure.npcs.find((n) => n.id === npcId)
-                  if (npc?.creature?.cr) allCRs.push(String(npc.creature.cr))
-                })
-                ;(encounter.creatures || []).forEach((creatureId) => {
-                  const creatures = (window as any).creatureReferences || []
-                  const creatureRef = creatures.find((c: CreatureReference) => c.id === creatureId)
-                  if (creatureRef?.creature?.cr) {
-                    allCRs.push(String(creatureRef.creature.cr))
-                  }
-                })
-                
-                const stats = calculateEncounterStats(
-                  adventure.overview.partyLevelAverage,
-                  adventure.overview.playerCount,
-                  encounter.difficulty,
-                  allCRs
-                )
-                
-                const percentColor = stats.percentUsed > 100 ? 'text-destructive' : 
-                  stats.percentUsed > 80 ? 'text-yellow-500' : 'text-green-500'
-                
-                return (
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Budget:</span>
-                      <span className="font-mono">{stats.budget} XP</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Used:</span>
-                      <span className="font-mono">{stats.spent} XP</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Remaining:</span>
-                      <span className="font-mono">{stats.remaining} XP</span>
-                    </div>
-                    <div className="flex justify-between pt-2 border-t border-border">
-                      <span className="text-muted-foreground">Budget Used:</span>
-                      <span className={`font-mono font-bold ${percentColor}`}>
-                        {Math.round(stats.percentUsed)}%
-                      </span>
-                    </div>
+          {/* Encounter Budget - Always visible for Tactical encounters */}
+          <div className="p-4 rounded-lg bg-secondary/30 border-2 border-border">
+            <div className="text-sm font-semibold mb-3">Encounter Budget (D&D 2024)</div>
+            {(() => {
+              const allCRs: string[] = []
+              ;(encounter.npcs || []).forEach((npcId) => {
+                const npc = adventure.npcs.find((n) => n.id === npcId)
+                if (npc?.creature?.cr) allCRs.push(String(npc.creature.cr))
+              })
+              ;(encounter.creatures || []).forEach((creatureId) => {
+                const creatures = (window as any).creatureReferences || []
+                const creatureRef = creatures.find((c: CreatureReference) => c.id === creatureId)
+                if (creatureRef?.creature?.cr) {
+                  allCRs.push(String(creatureRef.creature.cr))
+                }
+              })
+              
+              const difficulty = typeof encounter.difficulty === 'string' ? encounter.difficulty : 'moderate'
+              const stats = calculateEncounterStats(
+                adventure.overview.partyLevelAverage,
+                adventure.overview.playerCount,
+                difficulty,
+                allCRs
+              )
+              
+              const percentColor = stats.percentUsed > 100 ? 'text-destructive' : 
+                stats.percentUsed > 80 ? 'text-orange-400' : 'text-emerald-400'
+              
+              return (
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Budget:</span>
+                    <span className="font-mono font-medium">{stats.budget} XP</span>
                   </div>
-                )
-              })()}
-            </div>
-          )}
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Used:</span>
+                    <span className="font-mono font-medium">{stats.spent} XP</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Remaining:</span>
+                    <span className="font-mono font-medium">{stats.remaining} XP</span>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-border">
+                    <span className="text-muted-foreground">Budget Used:</span>
+                    <span className={`font-mono font-bold ${percentColor}`}>
+                      {Math.round(stats.percentUsed)}%
+                    </span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
 
           {/* Rewards Section */}
           <div>
@@ -398,8 +396,7 @@ export default function TacticalEncounterForm({
               </Select>
             )}
           </div>
-        </CardContent>
-      </Card>
+      </div>
 
       {/* Modals */}
       <MonsterSelector

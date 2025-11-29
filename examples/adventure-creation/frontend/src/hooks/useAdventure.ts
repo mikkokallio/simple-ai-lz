@@ -8,7 +8,7 @@ import { adventureAPI } from '@/lib/api';
  * Usage: Same API as useKV
  * const [value, setValue] = useAdventure<T>('key', defaultValue)
  */
-export function useAdventure<T>(key: string, defaultValue: T): [T, (value: T) => void] {
+export function useAdventure<T>(key: string, defaultValue: T): [T, (value: T) => void, boolean, (id: string) => Promise<void>] {
   const [value, setValueState] = useState<T>(defaultValue);
   const [isLoading, setIsLoading] = useState(true);
   const [adventureId, setAdventureId] = useState<string | null>(null);
@@ -38,26 +38,64 @@ export function useAdventure<T>(key: string, defaultValue: T): [T, (value: T) =>
   }, [key]);
 
   // Save adventure to backend
-  const setValue = useCallback(async (newValue: T) => {
-    setValueState(newValue);
+  const setValue = useCallback(async (newValue: T | ((prev: T) => T)) => {
+    // Handle function updates
+    const resolvedValue = typeof newValue === 'function' 
+      ? (newValue as (prev: T) => T)(value)
+      : newValue;
+    
+    setValueState(resolvedValue);
 
     try {
-      if (key === 'current-adventure' && newValue) {
-        const adventure = newValue as any;
+      if (key === 'current-adventure' && resolvedValue) {
+        const adventure = resolvedValue as any;
         
-        if (adventureId) {
+        // Always use the adventure's own ID - it's the source of truth
+        const id = adventure.id;
+        
+        if (!id) {
+          console.error('Adventure has no ID, cannot save');
+          return;
+        }
+        
+        // Check if this adventure already exists in the backend
+        if (adventureId === id) {
           // Update existing adventure
-          await adventureAPI.update(adventureId, adventure);
+          console.log('Updating adventure:', id);
+          await adventureAPI.update(id, adventure);
         } else {
-          // Create new adventure
-          const created = await adventureAPI.create(adventure);
-          setAdventureId(created.id);
+          // This is either a new adventure or we're switching adventures
+          // Try to update first, if it fails (404), create it
+          try {
+            console.log('Attempting to update adventure:', id);
+            await adventureAPI.update(id, adventure);
+            setAdventureId(id);
+          } catch (updateError: any) {
+            if (updateError.message?.includes('not found') || updateError.message?.includes('404')) {
+              console.log('Adventure not found, creating new:', id);
+              await adventureAPI.create(adventure);
+              setAdventureId(id);
+            } else {
+              throw updateError;
+            }
+          }
         }
       }
     } catch (error) {
       console.error('Failed to save adventure:', error);
     }
-  }, [key, adventureId]);
+  }, [key, adventureId, value]);
 
-  return [value, setValue];
+  const loadAdventure = useCallback(async (id: string) => {
+    try {
+      console.log('Loading adventure:', id);
+      const adventure = await adventureAPI.get(id);
+      setValueState(adventure as T);
+      setAdventureId(adventure.id);
+    } catch (error) {
+      console.error('Failed to load adventure:', error);
+    }
+  }, []);
+
+  return [value, setValue, isLoading, loadAdventure];
 }

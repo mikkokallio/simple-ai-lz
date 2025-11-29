@@ -3,8 +3,6 @@ import { Adventure, Encounter, EncounterType } from '@/types/adventure'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -48,8 +46,6 @@ const CARD_WIDTH = 160
 const CARD_HEIGHT = 160
 
 export default function StructureStage({ adventure, updateAdventure }: StructureStageProps) {
-  const [selectedEncounter, setSelectedEncounter] = useState<Encounter | null>(null)
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<string>('empty')
   const [connectingFrom, setConnectingFrom] = useState<{ encounterId: string; side: 'left' | 'right' } | null>(null)
@@ -144,7 +140,6 @@ export default function StructureStage({ adventure, updateAdventure }: Structure
         )
       }
     })
-    setEditDialogOpen(false)
   }
 
   const handleEncounterDragStart = (e: React.DragEvent, encounterId: string) => {
@@ -259,8 +254,11 @@ export default function StructureStage({ adventure, updateAdventure }: Structure
       }
       setConnectingFrom(null)
     } else {
-      setSelectedEncounter(encounter)
-      setEditDialogOpen(true)
+      // Navigate to Encounters stage with this encounter selected
+      updateAdventure({ 
+        stage: 'encounters',
+        selectedEncounterId: encounter.id
+      })
     }
   }
 
@@ -777,7 +775,7 @@ export default function StructureStage({ adventure, updateAdventure }: Structure
 
       <div className="flex gap-4 flex-1 min-h-0">
         <Card className={cn(
-          "flex-shrink-0 border-2 overflow-hidden flex flex-col transition-all duration-300",
+          "flex-shrink-0 border-2 overflow-hidden flex flex-col transition-all duration-300 self-start",
           libraryCollapsed ? "w-16" : "w-64"
         )}>
           <CardHeader className={cn(
@@ -863,8 +861,18 @@ export default function StructureStage({ adventure, updateAdventure }: Structure
 
         <Card 
           ref={canvasRef}
-          className="flex-1 border-2 relative overflow-hidden bg-black touch-none"
+          className="flex-1 border-2 relative overflow-hidden bg-black touch-none self-stretch"
           onDragOver={handleCanvasDragOver}
+          onDrop={handleCanvasDrop}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseUp={handleCanvasMouseUp}
+          onMouseLeave={handleCanvasMouseUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onWheel={handleWheel}
+          style={{ cursor: isPanning ? 'grabbing' : 'grab', touchAction: 'none' }}
           onDrop={handleCanvasDrop}
           onMouseDown={handleCanvasMouseDown}
           onMouseMove={handleCanvasMouseMove}
@@ -1048,64 +1056,6 @@ export default function StructureStage({ adventure, updateAdventure }: Structure
           </div>
         </Card>
       </div>
-
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-center">Edit Encounter</DialogTitle>
-            <DialogDescription className="text-center">
-              Configure this encounter - use the Encounters page for detailed editing
-            </DialogDescription>
-          </DialogHeader>
-          
-          {selectedEncounter && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">Title</label>
-                <Input
-                  value={selectedEncounter.title}
-                  onChange={(e) => {
-                    const updated = { ...selectedEncounter, title: e.target.value }
-                    setSelectedEncounter(updated)
-                    updateEncounter(selectedEncounter.id, { title: e.target.value })
-                  }}
-                  placeholder="Encounter title"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium mb-2 block">Description</label>
-                <Textarea
-                  value={selectedEncounter.description}
-                  onChange={(e) => {
-                    const updated = { ...selectedEncounter, description: e.target.value }
-                    setSelectedEncounter(updated)
-                    updateEncounter(selectedEncounter.id, { description: e.target.value })
-                  }}
-                  placeholder="Describe what happens in this encounter..."
-                  rows={4}
-                />
-              </div>
-
-              <div className="flex gap-2">
-                <Button
-                  variant="destructive"
-                  onClick={() => deleteEncounter(selectedEncounter.id)}
-                >
-                  Delete Encounter
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => setEditDialogOpen(false)}
-                  className="ml-auto"
-                >
-                  Close
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

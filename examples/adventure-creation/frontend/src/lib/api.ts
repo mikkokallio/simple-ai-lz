@@ -1,6 +1,8 @@
 // API client for backend communication
 // Replaces Spark's built-in storage and LLM APIs
 
+import { User } from '@/types/auth'
+
 // Runtime configuration from nginx-injected env-config.js
 declare global {
   interface Window {
@@ -31,6 +33,7 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
   
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
+    credentials: 'include', // Include cookies for session auth
     headers: {
       'Content-Type': 'application/json',
       'X-Session-Id': sessionId,
@@ -111,3 +114,59 @@ export async function llmPrompt(strings: TemplateStringsArray | string[], ...val
     { role: 'user', content: prompt }
   ]);
 }
+
+// Auth API
+export const authAPI = {
+  /**
+   * Get login URL (redirects to Google OAuth)
+   */
+  getLoginUrl: (): string => `${API_BASE_URL}/api/auth/login`,
+  
+  /**
+   * Get current authenticated user
+   */
+  getCurrentUser: () => apiFetch<User>('/api/auth/user'),
+  
+  /**
+   * Logout current user
+   */
+  logout: () => apiFetch<void>('/api/auth/logout', {
+    method: 'POST',
+  }),
+};
+
+// Admin API
+export const adminAPI = {
+  /**
+   * Get all users (admin only)
+   */
+  listUsers: () => apiFetch<User[]>('/api/admin/users'),
+  
+  /**
+   * Update user role (admin only)
+   */
+  updateUserRole: (userId: string, role: string) => apiFetch<User>('/api/admin/users/' + userId + '/role', {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  }),
+  
+  /**
+   * Save structure as template (admin only)
+   */
+  saveTemplate: (template: any) => apiFetch<any>('/api/admin/templates', {
+    method: 'POST',
+    body: JSON.stringify(template),
+  }),
+  
+  /**
+   * Get custom templates (admin only)
+   */
+  listTemplates: () => apiFetch<any[]>('/api/admin/templates'),
+  
+  /**
+   * Delete template (admin only)
+   */
+  deleteTemplate: (id: string) => apiFetch<void>('/api/admin/templates/' + id, {
+    method: 'DELETE',
+  }),
+};
