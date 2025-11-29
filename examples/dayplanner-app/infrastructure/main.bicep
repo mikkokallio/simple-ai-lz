@@ -38,35 +38,20 @@ param openAiDeployment string = 'gpt-4o'
 @description('Storage account name for blob storage')
 param storageAccountName string
 
+@description('Shared Cosmos DB account name from landing zone')
+param cosmosDbAccountName string
+
 // ============================================================================
-// Cosmos DB Account and Database
+// Reference Existing Shared Cosmos DB Account
 // ============================================================================
 
-resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
-  name: 'cosmos-dayplanner-${uniqueSuffix}'
-  location: location
-  kind: 'GlobalDocumentDB'
-  properties: {
-    consistencyPolicy: {
-      defaultConsistencyLevel: 'Session'
-    }
-    locations: [
-      {
-        locationName: location
-        failoverPriority: 0
-        isZoneRedundant: false
-      }
-    ]
-    databaseAccountOfferType: 'Standard'
-    enableAutomaticFailover: false
-    enableMultipleWriteLocations: false
-    capabilities: [
-      {
-        name: 'EnableServerless'
-      }
-    ]
-  }
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' existing = {
+  name: cosmosDbAccountName
 }
+
+// ============================================================================
+// App-Specific Cosmos DB Database
+// ============================================================================
 
 resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2023-11-15' = {
   parent: cosmosAccount
@@ -102,29 +87,19 @@ resource itinerariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabase
 }
 
 // ============================================================================
-// Storage Account (for future blob storage needs)
+// Reference Existing Shared Storage Account
 // ============================================================================
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
   name: storageAccountName
-  location: location
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    accessTier: 'Hot'
-    supportsHttpsTrafficOnly: true
-    minimumTlsVersion: 'TLS1_2'
-    allowBlobPublicAccess: false
-  }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' existing = {
   parent: storageAccount
   name: 'default'
 }
 
+// App-specific blob container
 resource dayplannerContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
   parent: blobService
   name: 'dayplanner-data'

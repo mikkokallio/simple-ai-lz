@@ -154,9 +154,12 @@ MANDATORY RULES:
 CRITICAL: User wants "${request.userInput}" - analyze this carefully and search for RELEVANT place types. Don't default to generic walking + eating!
 
 WORKFLOW:
-1. Call search_places multiple times (2-5 times) to find different types of venues matching the user's interests
-2. Call search_events to check for relevant events (but remember: no fake events!)
-3. Once you have search results, create a structured itinerary
+1. Call search_places multiple times (3-5 times) with DIFFERENT types to gather diverse options
+   - Example for "urban day": search for 'mall', then 'cinema', then 'nightclub', then 'restaurant'
+   - Example for "nature day": search for 'park', then 'viewpoint', then 'cafe', then 'nature_reserve'
+2. Aim for VARIETY - each search should be a different place type
+3. Call search_events to check for relevant events (but remember: no fake events!)
+4. Once you have diverse search results from multiple types, the system will create a balanced itinerary
 
 FINAL RESPONSE FORMAT:
 When you're ready to create the itinerary, respond with a JSON object:
@@ -219,14 +222,15 @@ Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest sea
           searchResults.events.push(...(functionResult || []));
         }
 
-        // Make another AI call to see if it wants to search more
+        // Make another AI call to see if it wants to search more DIFFERENT types
+        const uniqueTypes = [...new Set(searchResults.places.map((p: any) => p.type))];
         response = await this.openaiClient.chat.completions.create({
           model: 'gpt-4o',
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage },
             { role: 'assistant', content: null, function_call: message.function_call },
-            { role: 'user', content: `Found ${(functionResult || []).length} results. Search for more if needed, or create the itinerary.` },
+            { role: 'user', content: `Found ${(functionResult || []).length} results of type "${message.function_call.arguments ? JSON.parse(message.function_call.arguments).type : 'unknown'}". Already searched types: ${uniqueTypes.join(', ')}. Search for DIFFERENT types to create a diverse itinerary.` },
           ],
           functions,
           function_call: 'auto',
@@ -300,9 +304,43 @@ Remember: It's ${month} (${season}), ${weather.temperature}°C. Only suggest sea
 
     console.log(`Generating activities from ${places.length} places and ${events.length} events`);
 
+    // Group places by type for diversity
+    const placesByType = new Map<string, any[]>();
+    for (const place of places) {
+      const type = place.type;
+      if (!placesByType.has(type)) {
+        placesByType.set(type, []);
+      }
+      placesByType.get(type)!.push(place);
+    }
+
+    console.log(`Found ${placesByType.size} different place types: ${Array.from(placesByType.keys()).join(', ')}`);
+
+    // Select places with diversity - one from each type first
+    const selectedPlaces: any[] = [];
+    const typeEntries = Array.from(placesByType.entries());
+    
+    // First pass: one from each type
+    for (const [type, typePlaces] of typeEntries) {
+      if (selectedPlaces.length < 5) {
+        selectedPlaces.push(typePlaces[0]);
+      }
+    }
+
+    // Second pass: if we still need more, add second items from each type
+    if (selectedPlaces.length < 5) {
+      for (const [type, typePlaces] of typeEntries) {
+        if (selectedPlaces.length < 5 && typePlaces.length > 1) {
+          selectedPlaces.push(typePlaces[1]);
+        }
+      }
+    }
+
+    console.log(`Selected ${selectedPlaces.length} diverse places: ${selectedPlaces.map((p: any) => `${p.name} (${p.type})`).join(', ')}`);
+
     // Add places as activities
-    for (let i = 0; i < Math.min(places.length, 5); i++) {
-      const place = places[i];
+    for (let i = 0; i < selectedPlaces.length; i++) {
+      const place = selectedPlaces[i];
       
       activities.push({
         id: uuidv4(),
