@@ -1,0 +1,399 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.38.33.27573",
+      "templateHash": "5879829869219376491"
+    }
+  },
+  "parameters": {
+    "containerAppsEnvironmentId": {
+      "type": "string",
+      "metadata": {
+        "description": "Container Apps Environment resource ID (from LZ RG)"
+      }
+    },
+    "appInsightsConnectionString": {
+      "type": "string",
+      "metadata": {
+        "description": "Application Insights connection string"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for resources"
+      }
+    },
+    "uniqueSuffix": {
+      "type": "string",
+      "metadata": {
+        "description": "Unique suffix for resource names"
+      }
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Container Registry login server"
+      }
+    },
+    "acrUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Container Registry username"
+      }
+    },
+    "acrPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure Container Registry password"
+      }
+    },
+    "aiFoundryEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AI Foundry endpoint URL"
+      }
+    },
+    "documentIntelligenceEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Document Intelligence endpoint URL"
+      }
+    },
+    "documentTranslatorEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Document Translator endpoint URL"
+      }
+    },
+    "aiFoundryResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AI Foundry resource ID for RBAC"
+      }
+    },
+    "aiFoundryKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AI Foundry API key - ONLY for AI Foundry (managed identity not yet supported by SDK)"
+      }
+    },
+    "documentIntelligenceResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Document Intelligence endpoint URL"
+      }
+    },
+    "documentTranslatorResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Document Translator resource ID for RBAC"
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Storage account name for blob uploads"
+      }
+    },
+    "storageAccountResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Storage account resource ID for RBAC"
+      }
+    },
+    "azureOpenAIEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI endpoint URL (optional - uses AI Foundry if not provided)"
+      }
+    },
+    "azureOpenAIDeployment": {
+      "type": "string",
+      "defaultValue": "gpt-4o",
+      "metadata": {
+        "description": "Azure OpenAI deployment name (optional)"
+      }
+    },
+    "azureOpenAIResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI resource ID for RBAC (optional)"
+      }
+    },
+    "frontendImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Frontend container image"
+      }
+    },
+    "backendImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Backend container image"
+      }
+    }
+  },
+  "variables": {
+    "appNamePrefix": "ocr-trans",
+    "backendAppName": "[format('aca-{0}-backend-{1}', variables('appNamePrefix'), parameters('uniqueSuffix'))]",
+    "frontendAppName": "[format('aca-{0}-frontend-{1}', variables('appNamePrefix'), parameters('uniqueSuffix'))]",
+    "cognitiveServicesUserRoleId": "a97b65f3-24c7-4388-baec-2e87135dc908",
+    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+    "storageSubscriptionId": "[if(not(empty(parameters('storageAccountResourceId'))), split(parameters('storageAccountResourceId'), '/')[2], subscription().subscriptionId)]",
+    "storageResourceGroupName": "[if(not(empty(parameters('storageAccountResourceId'))), split(parameters('storageAccountResourceId'), '/')[4], resourceGroup().name)]",
+    "aiFoundrySubscriptionId": "[if(not(empty(parameters('aiFoundryResourceId'))), split(parameters('aiFoundryResourceId'), '/')[2], subscription().subscriptionId)]",
+    "aiFoundryRgName": "[if(not(empty(parameters('aiFoundryResourceId'))), split(parameters('aiFoundryResourceId'), '/')[4], resourceGroup().name)]",
+    "docIntelSubscriptionId": "[if(not(empty(parameters('documentIntelligenceResourceId'))), split(parameters('documentIntelligenceResourceId'), '/')[2], subscription().subscriptionId)]",
+    "docIntelRgName": "[if(not(empty(parameters('documentIntelligenceResourceId'))), split(parameters('documentIntelligenceResourceId'), '/')[4], resourceGroup().name)]",
+    "translatorSubscriptionId": "[if(not(empty(parameters('documentTranslatorResourceId'))), split(parameters('documentTranslatorResourceId'), '/')[2], subscription().subscriptionId)]",
+    "translatorRgName": "[if(not(empty(parameters('documentTranslatorResourceId'))), split(parameters('documentTranslatorResourceId'), '/')[4], resourceGroup().name)]",
+    "openAiSubscriptionId": "[if(not(empty(parameters('azureOpenAIResourceId'))), split(parameters('azureOpenAIResourceId'), '/')[2], subscription().subscriptionId)]",
+    "openAiRgName": "[if(not(empty(parameters('azureOpenAIResourceId'))), split(parameters('azureOpenAIResourceId'), '/')[4], resourceGroup().name)]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('backendAppName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Application": "ocr-translation",
+        "Component": "backend"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[parameters('containerAppsEnvironmentId')]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[parameters('acrLoginServer')]",
+              "username": "[parameters('acrUsername')]",
+              "passwordSecretRef": "acr-password"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "acr-password",
+              "value": "[parameters('acrPassword')]"
+            },
+            {
+              "name": "ai-foundry-key",
+              "value": "[parameters('aiFoundryKey')]"
+            },
+            {
+              "name": "session-secret",
+              "value": "[uniqueString(resourceGroup().id, variables('backendAppName'), parameters('uniqueSuffix'))]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 3000,
+            "transport": "auto",
+            "allowInsecure": false
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "backend",
+              "image": "[parameters('backendImage')]",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              },
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "PORT",
+                  "value": "3000"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "value": "[parameters('appInsightsConnectionString')]"
+                },
+                {
+                  "name": "AI_FOUNDRY_ENDPOINT",
+                  "value": "[parameters('aiFoundryEndpoint')]"
+                },
+                {
+                  "name": "AI_FOUNDRY_KEY",
+                  "secretRef": "ai-foundry-key"
+                },
+                {
+                  "name": "DOCUMENT_INTELLIGENCE_ENDPOINT",
+                  "value": "[parameters('documentIntelligenceEndpoint')]"
+                },
+                {
+                  "name": "TRANSLATOR_ENDPOINT",
+                  "value": "[parameters('documentTranslatorEndpoint')]"
+                },
+                {
+                  "name": "STORAGE_ACCOUNT_NAME",
+                  "value": "[parameters('storageAccountName')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_ENDPOINT",
+                  "value": "[parameters('azureOpenAIEndpoint')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_DEPLOYMENT",
+                  "value": "[parameters('azureOpenAIDeployment')]"
+                },
+                {
+                  "name": "SESSION_SECRET",
+                  "secretRef": "session-secret"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 3,
+            "rules": [
+              {
+                "name": "http-rule",
+                "http": {
+                  "metadata": {
+                    "concurrentRequests": "50"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('frontendAppName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Application": "ocr-translation",
+        "Component": "frontend"
+      },
+      "properties": {
+        "managedEnvironmentId": "[parameters('containerAppsEnvironmentId')]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[parameters('acrLoginServer')]",
+              "username": "[parameters('acrUsername')]",
+              "passwordSecretRef": "acr-password"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "acr-password",
+              "value": "[parameters('acrPassword')]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 80,
+            "transport": "auto",
+            "allowInsecure": false
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "frontend",
+              "image": "[parameters('frontendImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "BACKEND_URL",
+                  "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('backendAppName')), '2023-05-01').configuration.ingress.fqdn)]"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "value": "[parameters('appInsightsConnectionString')]"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 5,
+            "rules": [
+              {
+                "name": "http-rule",
+                "http": {
+                  "metadata": {
+                    "concurrentRequests": "100"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('backendAppName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "backendAppName": {
+      "type": "string",
+      "value": "[variables('backendAppName')]"
+    },
+    "backendAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('backendAppName')), '2023-05-01').configuration.ingress.fqdn)]"
+    },
+    "backendPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', variables('backendAppName')), '2023-05-01', 'full').identity.principalId]"
+    },
+    "frontendAppName": {
+      "type": "string",
+      "value": "[variables('frontendAppName')]"
+    },
+    "frontendAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('frontendAppName')), '2023-05-01').configuration.ingress.fqdn)]"
+    },
+    "storageContainersCreated": {
+      "type": "array",
+      "value": [
+        "uploads",
+        "processed",
+        "workspace",
+        "translation-source",
+        "translation-target"
+      ]
+    },
+    "deploymentInstructions": {
+      "type": "string",
+      "value": "=== OCR & Translation App Deployed ===\r\n\r\nFrontend URL: https://${frontendApp.properties.configuration.ingress.fqdn}\r\nBackend API URL: https://${backendApp.properties.configuration.ingress.fqdn}\r\n\r\n⚠️  These apps are INTERNAL - accessible only via VPN connection.\r\n\r\n⚠️  MANUAL RBAC REQUIRED:\r\nCross-RG RBAC assignments must be created manually in Azure Portal (Bicep limitation).\r\n\r\nAssign the following roles to Backend App managed identity (${backendApp.identity.principalId}):\r\n  - Storage Blob Data Contributor → Storage Account (stailzdemo08)\r\n  - Cognitive Services User → AI Foundry\r\n  - Cognitive Services User → Document Intelligence\r\n  - Cognitive Services User → Translator\r\n  - Cognitive Services User → Azure OpenAI\r\n\r\nSecurity Configuration:\r\n✅ Managed Identity: Document Intelligence, Translator, Storage (using RBAC)\r\n✅ Auto-generated Session Secret: Secure session management\r\n⚠️  AI Foundry Key: Required (SDK doesn't support managed identity yet - Azure limitation)\r\n⚠️  Storage Containers: Must be created in LZ deployment (not app deployment)\r\n\r\nTo access:\r\n1. Connect to the Azure Point-to-Site VPN\r\n2. Assign RBAC roles manually (see above)\r\n3. Open the frontend URL in your browser\r\n4. The frontend will communicate with the backend API\r\n\r\nTo update container images:\r\naz containerapp update -n ${backendApp.name} -g ${resourceGroup().name} --image <your-backend-image>\r\naz containerapp update -n ${frontendApp.name} -g ${resourceGroup().name} --image <your-frontend-image>\r\n"
+    }
+  }
+}

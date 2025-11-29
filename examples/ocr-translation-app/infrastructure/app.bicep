@@ -3,9 +3,14 @@
 // ============================================================================
 // Deploys frontend and backend Container Apps with managed identities
 // and RBAC assignments to Azure AI services
+//
+// DEPLOYMENT SCOPE: Resource Group (app-specific RG, not LZ RG)
+// Best Practice: Each app gets its own RG for lifecycle management
 // ============================================================================
 
-@description('Container Apps Environment resource ID')
+targetScope = 'resourceGroup'
+
+@description('Container Apps Environment resource ID (from LZ RG)')
 param containerAppsEnvironmentId string
 
 @description('Application Insights connection string')
@@ -17,7 +22,13 @@ param location string = resourceGroup().location
 @description('Unique suffix for resource names')
 param uniqueSuffix string
 
-@description('Azure Container Registry password (use listCredentials or managed identity in production)')
+@description('Azure Container Registry login server')
+param acrLoginServer string
+
+@description('Azure Container Registry username')
+param acrUsername string
+
+@description('Azure Container Registry password')
 @secure()
 param acrPassword string
 
@@ -33,11 +44,11 @@ param documentTranslatorEndpoint string = ''
 @description('AI Foundry resource ID for RBAC')
 param aiFoundryResourceId string = ''
 
-@description('AI Foundry API key')
+@description('AI Foundry API key - ONLY for AI Foundry (managed identity not yet supported by SDK)')
 @secure()
 param aiFoundryKey string = ''
 
-@description('Document Intelligence resource ID for RBAC')
+@description('Document Intelligence endpoint URL')
 param documentIntelligenceResourceId string = ''
 
 @description('Document Translator resource ID for RBAC')
@@ -49,17 +60,13 @@ param storageAccountName string = ''
 @description('Storage account resource ID for RBAC')
 param storageAccountResourceId string = ''
 
-@description('Azure OpenAI endpoint URL')
+@description('Azure OpenAI endpoint URL (optional - uses AI Foundry if not provided)')
 param azureOpenAIEndpoint string = ''
 
-@description('Azure OpenAI API key')
-@secure()
-param azureOpenAIKey string = ''
-
-@description('Azure OpenAI deployment name')
+@description('Azure OpenAI deployment name (optional)')
 param azureOpenAIDeployment string = 'gpt-4o'
 
-@description('Azure OpenAI resource ID for RBAC')
+@description('Azure OpenAI resource ID for RBAC (optional)')
 param azureOpenAIResourceId string = ''
 
 @description('Frontend container image')
@@ -82,6 +89,69 @@ var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 // Storage Blob Data Contributor role for blob uploads
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
+// Parse storage account resource ID for cross-RG reference
+var storageSubscriptionId = !empty(storageAccountResourceId) ? split(storageAccountResourceId, '/')[2] : subscription().subscriptionId
+var storageResourceGroupName = !empty(storageAccountResourceId) ? split(storageAccountResourceId, '/')[4] : resourceGroup().name
+
+// ============================================================================
+// STORAGE CONTAINERS
+// ============================================================================
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(storageAccountResourceId)) {
+  name: storageAccountName
+  scope: resourceGroup(storageSubscriptionId, storageResourceGroupName)
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' existing = if (!empty(storageAccountResourceId)) {
+  parent: storageAccount
+  name: 'default'
+}
+
+// Container for document uploads
+resource uploadsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = if (!empty(storageAccountResourceId)) {
+  parent: blobService
+  name: 'uploads'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Container for processed documents
+resource processedContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = if (!empty(storageAccountResourceId)) {
+  parent: blobService
+  name: 'processed'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Container for workspace metadata
+resource workspaceContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = if (!empty(storageAccountResourceId)) {
+  parent: blobService
+  name: 'workspace'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Container for translation source files
+resource translationSourceContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = if (!empty(storageAccountResourceId)) {
+  parent: blobService
+  name: 'translation-source'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Container for translation target files
+resource translationTargetContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = if (!empty(storageAccountResourceId)) {
+  parent: blobService
+  name: 'translation-target'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // ============================================================================
 // BACKEND CONTAINER APP
 // ============================================================================
@@ -101,8 +171,8 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
     configuration: {
       registries: [
         {
-          server: 'acrezle7syiailz.azurecr.io'
-          username: 'acrezle7syiailz'
+          server: acrLoginServer
+          username: acrUsername
           passwordSecretRef: 'acr-password'
         }
       ]
@@ -116,8 +186,8 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
           value: aiFoundryKey
         }
         {
-          name: 'azure-openai-key'
-          value: azureOpenAIKey
+          name: 'session-secret'
+          value: uniqueString(resourceGroup().id, backendAppName, uniqueSuffix)
         }
       ]
       ingress: {
@@ -174,12 +244,12 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
               value: azureOpenAIEndpoint
             }
             {
-              name: 'AZURE_OPENAI_API_KEY'
-              secretRef: 'azure-openai-key'
-            }
-            {
               name: 'AZURE_OPENAI_DEPLOYMENT'
               value: azureOpenAIDeployment
+            }
+            {
+              name: 'SESSION_SECRET'
+              secretRef: 'session-secret'
             }
           ]
         }
@@ -200,6 +270,13 @@ resource backendApp 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
+  dependsOn: [
+    uploadsContainer
+    processedContainer
+    workspaceContainer
+    translationSourceContainer
+    translationTargetContainer
+  ]
 }
 
 // ============================================================================
@@ -218,8 +295,8 @@ resource frontendApp 'Microsoft.App/containerApps@2023-05-01' = {
     configuration: {
       registries: [
         {
-          server: 'acrezle7syiailz.azurecr.io'
-          username: 'acrezle7syiailz'
+          server: acrLoginServer
+          username: acrUsername
           passwordSecretRef: 'acr-password'
         }
       ]
@@ -279,30 +356,43 @@ resource frontendApp 'Microsoft.App/containerApps@2023-05-01' = {
 // RBAC ASSIGNMENTS (Backend managed identity to AI services)
 // ============================================================================
 
-// Reference to AI services for proper scoping
+// Parse resource IDs for cross-RG references
+var aiFoundrySubscriptionId = !empty(aiFoundryResourceId) ? split(aiFoundryResourceId, '/')[2] : subscription().subscriptionId
+var aiFoundryRgName = !empty(aiFoundryResourceId) ? split(aiFoundryResourceId, '/')[4] : resourceGroup().name
+
+var docIntelSubscriptionId = !empty(documentIntelligenceResourceId) ? split(documentIntelligenceResourceId, '/')[2] : subscription().subscriptionId
+var docIntelRgName = !empty(documentIntelligenceResourceId) ? split(documentIntelligenceResourceId, '/')[4] : resourceGroup().name
+
+var translatorSubscriptionId = !empty(documentTranslatorResourceId) ? split(documentTranslatorResourceId, '/')[2] : subscription().subscriptionId
+var translatorRgName = !empty(documentTranslatorResourceId) ? split(documentTranslatorResourceId, '/')[4] : resourceGroup().name
+
+var openAiSubscriptionId = !empty(azureOpenAIResourceId) ? split(azureOpenAIResourceId, '/')[2] : subscription().subscriptionId
+var openAiRgName = !empty(azureOpenAIResourceId) ? split(azureOpenAIResourceId, '/')[4] : resourceGroup().name
+
+// Reference to AI services for proper scoping (cross-RG)
 resource aiFoundryService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(aiFoundryResourceId)) {
   name: last(split(aiFoundryResourceId, '/'))
-  scope: resourceGroup(split(aiFoundryResourceId, '/')[2], split(aiFoundryResourceId, '/')[4])
+  scope: resourceGroup(aiFoundrySubscriptionId, aiFoundryRgName)
 }
 
 resource documentIntelligenceService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(documentIntelligenceResourceId)) {
   name: last(split(documentIntelligenceResourceId, '/'))
-  scope: resourceGroup(split(documentIntelligenceResourceId, '/')[2], split(documentIntelligenceResourceId, '/')[4])
+  scope: resourceGroup(docIntelSubscriptionId, docIntelRgName)
 }
 
 resource translatorService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(documentTranslatorResourceId)) {
   name: last(split(documentTranslatorResourceId, '/'))
-  scope: resourceGroup(split(documentTranslatorResourceId, '/')[2], split(documentTranslatorResourceId, '/')[4])
+  scope: resourceGroup(translatorSubscriptionId, translatorRgName)
 }
 
 resource storageAccountService 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(storageAccountResourceId)) {
-  name: last(split(storageAccountResourceId, '/'))
-  scope: resourceGroup(split(storageAccountResourceId, '/')[2], split(storageAccountResourceId, '/')[4])
+  name: storageAccountName
+  scope: resourceGroup(storageSubscriptionId, storageResourceGroupName)
 }
 
 resource azureOpenAIService 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!empty(azureOpenAIResourceId)) {
   name: last(split(azureOpenAIResourceId, '/'))
-  scope: resourceGroup(split(azureOpenAIResourceId, '/')[2], split(azureOpenAIResourceId, '/')[4])
+  scope: resourceGroup(openAiSubscriptionId, openAiRgName)
 }
 
 // RBAC to AI Foundry
@@ -382,6 +472,14 @@ output backendPrincipalId string = backendApp.identity.principalId
 output frontendAppName string = frontendApp.name
 output frontendAppUrl string = 'https://${frontendApp.properties.configuration.ingress.fqdn}'
 
+output storageContainersCreated array = [
+  'uploads'
+  'processed'
+  'workspace'
+  'translation-source'
+  'translation-target'
+]
+
 output deploymentInstructions string = '''
 === OCR & Translation App Deployed ===
 
@@ -389,6 +487,12 @@ Frontend URL: https://${frontendApp.properties.configuration.ingress.fqdn}
 Backend API URL: https://${backendApp.properties.configuration.ingress.fqdn}
 
 ⚠️  These apps are INTERNAL - accessible only via VPN connection.
+
+Security Configuration:
+✅ Managed Identity: Document Intelligence, Translator, Storage (using RBAC)
+✅ Auto-generated Session Secret: Secure session management
+✅ Storage Containers: All required containers created automatically
+⚠️  AI Foundry Key: Required (SDK doesn't support managed identity yet - Azure limitation)
 
 To access:
 1. Connect to the Azure Point-to-Site VPN
